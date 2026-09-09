@@ -163,6 +163,13 @@ def cmd_status(args):
     print(f"Server:  {'RUNNING (pid ' + str(st['server_pid']) + ')' if st['server_running'] else 'stopped'}")
     print(f"Tunnel:  {'RUNNING (pid ' + str(st['tunnel_pid']) + ')' if st['tunnel_running'] else 'stopped'}")
     print(f"Join address: {st['join_address'] or '(not assigned yet - check logs/tunnel.out.log)'}")
+    if st["whitelist_enabled"] is None:
+        print("Whitelist: unknown (server.properties not found yet)")
+    elif st["whitelist_enabled"]:
+        names = ", ".join(st["whitelist_names"]) or "no one yet"
+        print(f"Whitelist: ON ({names})")
+    else:
+        print("Whitelist: OFF - anyone with a Minecraft account can join. Run `run.bat whitelist-add <username>`.")
     return 0
 
 
@@ -172,6 +179,19 @@ def cmd_set_address(args):
     config.save(cfg)
     print(f"Join address set to: {args.address}")
     return 0
+
+
+def cmd_whitelist_add(args):
+    cfg = config.load()
+    server_dir = config.server_dir(cfg)
+    if not server_dir or not server_dir.exists():
+        print("No world configured yet. Run `run.bat setup` first.")
+        return 1
+
+    result = actions.add_to_whitelist(cfg, server_dir, args.username)
+    for line in result.lines:
+        print(line)
+    return 0 if result.ok else 1
 
 
 def cmd_configure_relay(args):
@@ -234,6 +254,10 @@ def build_parser():
     p_addr = sub.add_parser("set-address", help="Record/override the persistent join address")
     p_addr.add_argument("address")
     p_addr.set_defaults(func=cmd_set_address)
+
+    p_wl = sub.add_parser("whitelist-add", help="Add a player to the whitelist (works whether or not the server is running)")
+    p_wl.add_argument("username")
+    p_wl.set_defaults(func=cmd_whitelist_add)
 
     sub.add_parser("configure-relay", help="Set up your self-hosted relay subdomain + token").set_defaults(
         func=cmd_configure_relay

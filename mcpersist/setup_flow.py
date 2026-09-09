@@ -67,9 +67,32 @@ def write_server_properties(server_dir, cfg, enable_whitelist):
         "rcon.password": cfg["rcon_password"],
         "motd": f"{cfg['world_name']} (persistent, via MCPersist)",
         "white-list": "true" if enable_whitelist else "false",
+        "view-distance": str(config.ensure_view_distance(cfg)),
+        "simulation-distance": str(config.ensure_simulation_distance(cfg)),
     }
     path = Path(server_dir) / "server.properties"
     lines = [f"{k}={v}" for k, v in props.items()]
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def update_server_properties(server_dir, updates):
+    """Patches specific keys in an existing server.properties, preserving everything
+    else - unlike write_server_properties (which regenerates the whole file, only
+    appropriate at first setup), this is safe to call before every start so
+    auto-sized settings like view-distance stay current without clobbering state that
+    changes independently of MCPersist, like the whitelist toggle via RCON/in-game."""
+    path = Path(server_dir) / "server.properties"
+    if not path.exists():
+        return
+    lines = path.read_text(encoding="utf-8").splitlines()
+    remaining = dict(updates)
+    for i, line in enumerate(lines):
+        if "=" not in line or line.strip().startswith("#"):
+            continue
+        key = line.split("=", 1)[0]
+        if key in remaining:
+            lines[i] = f"{key}={remaining.pop(key)}"
+    lines.extend(f"{k}={v}" for k, v in remaining.items())
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
@@ -264,6 +287,11 @@ def finish_setup(instance_dir, world_name, mc_version, loader, owner_uuid, owner
     write_server_properties(server_dir, cfg, enable_whitelist=bool(owner_uuid and owner_name))
     config.save(cfg)
 
+    lines.append(
+        f"View/simulation distance set to {config.ensure_view_distance(cfg)}/"
+        f"{config.ensure_simulation_distance(cfg)} based on this PC's specs - change this anytime "
+        "in the Performance section of the status screen."
+    )
     lines.append("Setup complete.")
     return ActionResult(True, lines)
 

@@ -52,8 +52,10 @@ class StatusPage(QWidget):
         state_row.setSpacing(24)
         self.server_label = QLabel("Server: -")
         self.tunnel_label = QLabel("Tunnel: -")
+        self.whitelist_label = QLabel("Whitelist: -")
         state_row.addWidget(self.server_label)
         state_row.addWidget(self.tunnel_label)
+        state_row.addWidget(self.whitelist_label)
         state_row.addStretch()
         status_layout.addLayout(state_row)
 
@@ -106,6 +108,26 @@ class StatusPage(QWidget):
         world_layout.addLayout(folder_row)
         layout.addWidget(world_box)
 
+        # ----- Whitelist group -----
+        # Deliberately not an "Add Friend" text box - a one-way add-only control with
+        # no visibility into who's already on the list, or a way to remove someone,
+        # gives false confidence and still sends people back to real commands sooner
+        # or later. Management stays in Minecraft's own hands; this just makes the
+        # actual state impossible to miss, with a one-line pointer to the real fix.
+        whitelist_box = QGroupBox("Whitelist")
+        whitelist_layout = QVBoxLayout(whitelist_box)
+        self.whitelist_warning = QLabel("")
+        self.whitelist_warning.setWordWrap(True)
+        self.whitelist_warning.setStyleSheet("color: #e74c3c; font-weight: bold;")
+        whitelist_layout.addWidget(self.whitelist_warning)
+        self.whitelist_players_label = QLabel("")
+        self.whitelist_players_label.setWordWrap(True)
+        whitelist_layout.addWidget(self.whitelist_players_label)
+        hint_label = QLabel("Friends can't join? Use /whitelist commands in Minecraft.")
+        hint_label.setStyleSheet("color: #888;")
+        whitelist_layout.addWidget(hint_label)
+        layout.addWidget(whitelist_box)
+
         # ----- Memory group -----
         memory_box = QGroupBox("Memory")
         memory_layout = QVBoxLayout(memory_box)
@@ -134,9 +156,45 @@ class StatusPage(QWidget):
         memory_layout.addWidget(self.ram_msg)
         layout.addWidget(memory_box)
 
+        # ----- Performance group -----
+        perf_box = QGroupBox("Performance")
+        perf_layout = QVBoxLayout(perf_box)
+
+        self.perf_detected_label = QLabel("")
+        self.perf_detected_label.setStyleSheet("color: #888;")
+        self.perf_detected_label.setWordWrap(True)
+        perf_layout.addWidget(self.perf_detected_label)
+
+        perf_auto_row = QHBoxLayout()
+        self.perf_auto_check = QCheckBox("Auto")
+        self.perf_auto_check.toggled.connect(self.on_perf_auto_toggled)
+        perf_auto_row.addWidget(self.perf_auto_check)
+        perf_auto_row.addStretch()
+        perf_layout.addLayout(perf_auto_row)
+
+        perf_row = QHBoxLayout()
+        perf_row.addWidget(QLabel("View distance"))
+        self.view_spin = QSpinBox()
+        perf_row.addWidget(self.view_spin, 1)
+        perf_row.addWidget(QLabel("Simulation distance"))
+        self.sim_spin = QSpinBox()
+        perf_row.addWidget(self.sim_spin, 1)
+        perf_save_btn = QPushButton("Save")
+        perf_save_btn.setFixedWidth(70)
+        perf_save_btn.clicked.connect(self.on_save_perf)
+        perf_row.addWidget(perf_save_btn)
+        perf_layout.addLayout(perf_row)
+
+        self.perf_msg = QLabel("")
+        self.perf_msg.setWordWrap(True)
+        self.perf_msg.setStyleSheet("color: #b45309;")
+        perf_layout.addWidget(self.perf_msg)
+        layout.addWidget(perf_box)
+
         layout.addStretch()
 
         self.init_ram_controls()
+        self.init_perf_controls()
 
         self._worker = None
         self.timer = QTimer(self)
@@ -163,6 +221,9 @@ class StatusPage(QWidget):
             self.world_label.setText("No world configured yet")
             self.server_label.setText("Server: -")
             self.tunnel_label.setText("Tunnel: -")
+            self.whitelist_label.setText("Whitelist: -")
+            self.whitelist_warning.setText("")
+            self.whitelist_players_label.setText("")
             self.address_label.setText("-")
             self.start_btn.setEnabled(False)
             self.stop_btn.setEnabled(False)
@@ -173,6 +234,29 @@ class StatusPage(QWidget):
         self._set_state_label(self.server_label, "Server", st["server_running"])
         self._set_state_label(self.tunnel_label, "Tunnel", st["tunnel_running"])
         self.address_label.setText(st["join_address"] or "(not assigned yet)")
+
+        names = st["whitelist_names"]
+        if st["whitelist_enabled"] is None:
+            self.whitelist_label.setText("Whitelist: -")
+            self.whitelist_warning.setText("")
+            self.whitelist_players_label.setText("")
+        elif st["whitelist_enabled"]:
+            self.whitelist_label.setText(
+                f"Whitelist: <span style='color:#2ecc71; font-weight:bold;'>ON</span> "
+                f"({len(names)} player{'s' if len(names) != 1 else ''})"
+            )
+            self.whitelist_warning.setText("")
+            self.whitelist_players_label.setText("Whitelisted: " + (", ".join(names) if names else "no one yet"))
+        else:
+            self.whitelist_label.setText(
+                "Whitelist: <span style='color:#e74c3c; font-weight:bold;'>OFF</span>"
+            )
+            self.whitelist_warning.setText(
+                "Whitelist is OFF - your server is reachable at a public address, and anyone with a "
+                "Minecraft account can join. Turn it on with `whitelist on` (and add players below) "
+                "as soon as possible."
+            )
+            self.whitelist_players_label.setText("")
 
         both_up = st["server_running"] and st["tunnel_running"]
         both_down = not st["server_running"] and not st["tunnel_running"]
@@ -273,6 +357,12 @@ class StatusPage(QWidget):
             recommended_gb = config.suggest_memory_mb() // 1024
             self.ram_spin.setValue(recommended_gb)
 
+    def _restart_hint(self):
+        st, _, _ = self.current_status()
+        if st and st["server_running"]:
+            return " Server is running on the old value - click Restart to apply."
+        return " Takes effect next time you start the server."
+
     def on_save_ram(self):
         import psutil
 
@@ -286,14 +376,65 @@ class StatusPage(QWidget):
         config.save(cfg)
 
         if is_auto:
-            self.ram_msg.setText(f"Saved - auto mode, currently {chosen_gb} GB based on this machine's specs.")
+            self.ram_msg.setText(
+                f"Saved - auto mode, currently {chosen_gb} GB based on this machine's specs."
+                + self._restart_hint()
+            )
         elif chosen_gb >= total_gb:
             self.ram_msg.setText(
                 f"Saved, but {chosen_gb} GB leaves little to no headroom for the OS on this "
                 f"{total_gb} GB machine - the server may struggle or fail to start."
+                + self._restart_hint()
             )
         else:
-            self.ram_msg.setText("Saved - takes effect next Start/Restart.")
+            self.ram_msg.setText("Saved." + self._restart_hint())
+
+    def init_perf_controls(self):
+        import psutil
+
+        cores = psutil.cpu_count(logical=True) or 4
+        self.perf_detected_label.setText(
+            f"Detected {cores} CPU core(s) - recommended view distance "
+            f"{config.suggest_view_distance()}, simulation distance {config.suggest_simulation_distance()}."
+        )
+        self.view_spin.setRange(config.MIN_VIEW_DISTANCE, config.MAX_DISTANCE)
+        self.sim_spin.setRange(config.MIN_SIMULATION_DISTANCE, config.MAX_DISTANCE)
+
+        cfg = config.load()
+        is_auto = cfg.get("performance_auto", True)
+        self.perf_auto_check.setChecked(is_auto)
+        self.view_spin.setEnabled(not is_auto)
+        self.sim_spin.setEnabled(not is_auto)
+
+        self.view_spin.setValue(config.ensure_view_distance(cfg))
+        self.sim_spin.setValue(config.ensure_simulation_distance(cfg))
+        self.perf_msg.setText("")
+
+    def on_perf_auto_toggled(self, checked):
+        self.view_spin.setEnabled(not checked)
+        self.sim_spin.setEnabled(not checked)
+        if checked:
+            self.view_spin.setValue(config.suggest_view_distance())
+            self.sim_spin.setValue(config.suggest_simulation_distance())
+
+    def on_save_perf(self):
+        is_auto = self.perf_auto_check.isChecked()
+        chosen_view = self.view_spin.value()
+        chosen_sim = self.sim_spin.value()
+
+        cfg = config.load()
+        cfg["performance_auto"] = is_auto
+        cfg["view_distance"] = chosen_view
+        cfg["simulation_distance"] = chosen_sim
+        config.save(cfg)
+
+        if is_auto:
+            self.perf_msg.setText(
+                f"Saved - auto mode, currently {chosen_view}/{chosen_sim} based on this machine's specs."
+                + self._restart_hint()
+            )
+        else:
+            self.perf_msg.setText("Saved." + self._restart_hint())
 
 
 class SetupPage(QWidget):

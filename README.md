@@ -40,15 +40,23 @@ on but no whitelist, literally any real Minecraft account can join and grief the
 world. Turning the whitelist off, even briefly, means anyone who happens to scan your
 address in that window gets in.
 
-**To add a friend**, with the server running, run either through RCON or in-game by
-an op:
+The main status screen always shows whether the whitelist is currently ON or OFF
+(with a warning if it's off) and who's currently on it, so it's not something you
+have to remember to check or dig through a log for.
+
+**To add or remove a friend**, run either through RCON/the server console, or
+in-game by an op:
 
 ```
 whitelist add <their exact Minecraft username>
+whitelist remove <username>
+whitelist list
 ```
 
 Case-sensitive, needs their real account name. To make someone an op too:
-`op <username>`, same way. Both take effect immediately, no restart needed.
+`op <username>`, same way. All of these take effect immediately, no restart needed -
+or from the CLI, `run.bat whitelist-add <username>` does the same as the first one
+(works whether the server's running or not).
 
 If the owner couldn't be auto-detected during setup (an ambiguous or already-shared
 world - setup says so explicitly when this happens), the whitelist is left off and
@@ -120,7 +128,7 @@ mcpersist/
   tunnel_relay_run.py     the tunnel client itself - talks to the relay
   process_manager.py     detached-process/PID-file management
   rcon.py                  minimal RCON client (graceful server stop, admin commands)
-  config.py               config.json load/save, RAM auto-sizing
+  config.py               config.json load/save, RAM/view-distance auto-sizing
   autostart.py            start-on-login (Task Scheduler or Startup-folder fallback)
 
 relay/                  runs on a VPS you control - see relay/README.md

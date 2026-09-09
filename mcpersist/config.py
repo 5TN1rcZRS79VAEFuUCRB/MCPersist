@@ -1,4 +1,5 @@
-"""Loads/saves config.json and resolves the memory (RAM) allocation to use."""
+"""Loads/saves config.json and resolves the memory/view-distance/simulation-distance
+settings to use, each auto-sized from system specs unless overridden."""
 
 import json
 import secrets
@@ -15,6 +16,9 @@ DEFAULTS = {
     "required_java_major": None,
     "memory_auto": True,
     "memory_mb": None,
+    "performance_auto": True,
+    "view_distance": None,
+    "simulation_distance": None,
     "rcon_port": 25575,
     "rcon_password": None,
     "join_address": None,
@@ -82,6 +86,52 @@ def suggest_memory_mb():
     else:
         suggested_gb = 8
     return suggested_gb * 1024
+
+
+def suggest_view_distance():
+    """View/simulation distance are CPU-bound (each extra ring is a lot more chunks to
+    generate and tick), and like the RAM sizing above, this server shares the CPU with
+    everything else the user is doing rather than owning a dedicated box - so this
+    favors running smoothly alongside other things over maxing out what the hardware
+    could technically do."""
+    import psutil
+
+    cores = psutil.cpu_count(logical=True) or 4
+    if cores <= 4:
+        return 6
+    elif cores <= 8:
+        return 8
+    elif cores <= 12:
+        return 10
+    else:
+        return 12
+
+
+def suggest_simulation_distance():
+    # Simulation distance drives entity/redstone/etc. ticking, which is more expensive
+    # per-chunk than just rendering terrain - keep it a bit tighter than view distance
+    # rather than matching it 1:1.
+    return max(4, suggest_view_distance() - 2)
+
+
+MIN_VIEW_DISTANCE = 3
+MIN_SIMULATION_DISTANCE = 2
+MAX_DISTANCE = 32  # Minecraft's own ceiling for both
+
+
+def ensure_view_distance(cfg):
+    """Same auto/manual resolution as ensure_memory_mb: freshly recomputed from
+    current specs when performance_auto is on, otherwise the user's explicit choice
+    (floored at MIN_VIEW_DISTANCE regardless, since Minecraft rejects lower)."""
+    if cfg.get("performance_auto", True):
+        return suggest_view_distance()
+    return max(MIN_VIEW_DISTANCE, cfg.get("view_distance") or suggest_view_distance())
+
+
+def ensure_simulation_distance(cfg):
+    if cfg.get("performance_auto", True):
+        return suggest_simulation_distance()
+    return max(MIN_SIMULATION_DISTANCE, cfg.get("simulation_distance") or suggest_simulation_distance())
 
 
 def ensure_memory_mb(cfg):
