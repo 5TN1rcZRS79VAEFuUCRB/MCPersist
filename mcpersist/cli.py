@@ -65,7 +65,9 @@ def cmd_setup(args):
         info = setup_flow.detect_new_world_info(instance_dir)
         mc_version = prompt("Minecraft version to generate (e.g. 1.20.4)", info["mc_version"])
         loader = _prompt_loader(info["suggested_loader"])
-        owner_username = prompt("Your Minecraft username (for whitelist/op) - leave blank to skip")
+        owner_username = prompt("Your Minecraft username (required - the whitelist means nobody can join without it)")
+        while not owner_username or not owner_username.strip():
+            owner_username = prompt("A username is required - nobody can join a whitelisted server without one")
 
         print()
         prepare_result = setup_flow.prepare_new_world(instance_dir, world_name, owner_username)
@@ -92,15 +94,9 @@ def cmd_setup(args):
 
     owner_uuid = prepare_result.data.get("owner_uuid")
     owner_name = prepare_result.data.get("owner_name")
-    allow_cheats = False
-    if prepare_result.data.get("whitelisted"):
-        answer = prompt(
-            f"Give {owner_name!r} command/cheat access on this server (like allowing cheats on LAN)?", "y"
-        )
-        allow_cheats = answer.lower().startswith("y")
 
     print()
-    finish_result = setup_flow.finish_setup(instance_dir, world_name, mc_version, loader, owner_uuid, owner_name, allow_cheats)
+    finish_result = setup_flow.finish_setup(instance_dir, world_name, mc_version, loader, owner_uuid, owner_name)
     for line in finish_result.lines:
         print(line)
     if not finish_result.ok:

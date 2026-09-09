@@ -185,7 +185,12 @@ def prepare_new_world(instance_dir, world_name, owner_username):
     """Sets up a server directory for a brand-new world - there's no existing save to
     copy, the Minecraft server generates it itself on first start. The owner can't be
     auto-detected from player data that doesn't exist yet, so it's resolved from a
-    typed-in username instead."""
+    typed-in username instead - required, not optional, since with the whitelist on
+    (always, for a new world - there's no existing owner to leave it off for) nobody
+    including the owner can join without it."""
+    if not owner_username or not owner_username.strip():
+        return ActionResult(False, ["A Minecraft username is required - nobody can join a whitelisted server without one."])
+
     server_dir = SERVERS_DIR / world_name
     if server_dir.exists() and any(server_dir.iterdir()):
         return ActionResult(False, [f"{server_dir} already exists - pick a different world name."])
@@ -196,17 +201,14 @@ def prepare_new_world(instance_dir, world_name, owner_username):
 
     owner_uuid = owner_name = None
     whitelisted = False
-    if owner_username:
-        resolved = mojang.uuid_for_username(owner_username)
-        if resolved:
-            owner_uuid, owner_name = resolved
-            write_whitelist(server_dir, owner_uuid, owner_name)
-            whitelisted = True
-            not_whitelisted_reason = None
-        else:
-            not_whitelisted_reason = f"Couldn't find a Minecraft account named {owner_username!r}"
+    resolved = mojang.uuid_for_username(owner_username.strip())
+    if resolved:
+        owner_uuid, owner_name = resolved
+        write_whitelist(server_dir, owner_uuid, owner_name)
+        whitelisted = True
+        not_whitelisted_reason = None
     else:
-        not_whitelisted_reason = "No owner username given"
+        not_whitelisted_reason = f"Couldn't find a Minecraft account named {owner_username!r}"
     lines.extend(_whitelist_result_lines(whitelisted, owner_name, not_whitelisted_reason))
 
     return ActionResult(
@@ -216,14 +218,18 @@ def prepare_new_world(instance_dir, world_name, owner_username):
     )
 
 
-def finish_setup(instance_dir, world_name, mc_version, loader, owner_uuid, owner_name, allow_cheats):
-    """Downloads the matching server jar, ops the owner if requested, and writes
-    eula/server.properties/config.json. Assumes prepare_world already ran."""
+def finish_setup(instance_dir, world_name, mc_version, loader, owner_uuid, owner_name):
+    """Downloads the matching server jar, ops the owner if one was whitelisted, and
+    writes eula/server.properties/config.json. Assumes prepare_world already ran.
+
+    The owner is always opped when known, not a choice - getting into a whitelisted
+    server at all already means they're trusted enough to be there, so there's no
+    real distinction left to ask about."""
     cfg = config.load()
     server_dir = SERVERS_DIR / world_name
 
     lines = []
-    if owner_uuid and owner_name and allow_cheats:
+    if owner_uuid and owner_name:
         write_ops(server_dir, owner_uuid, owner_name)
         lines.append(f"Opped {owner_name!r}.")
 

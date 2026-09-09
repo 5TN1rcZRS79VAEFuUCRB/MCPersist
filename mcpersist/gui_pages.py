@@ -85,6 +85,17 @@ class StatusPage(QWidget):
         addr_row.addWidget(copy_btn)
         status_layout.addLayout(addr_row)
 
+        # Whitelist doesn't get its own section - it's just a status/warning, not
+        # something with its own actions to take (management is real Minecraft
+        # commands, not a GUI control), so it lives here with the rest of the status.
+        self.whitelist_warning = QLabel("")
+        self.whitelist_warning.setWordWrap(True)
+        self.whitelist_warning.setStyleSheet("color: #e74c3c; font-weight: bold;")
+        status_layout.addWidget(self.whitelist_warning)
+        whitelist_hint = QLabel("Friends can't join? Use /whitelist commands in Minecraft.")
+        whitelist_hint.setStyleSheet("color: #888;")
+        status_layout.addWidget(whitelist_hint)
+
         layout.addWidget(status_box)
 
         # ----- Primary actions -----
@@ -122,26 +133,6 @@ class StatusPage(QWidget):
         folder_row.addWidget(open_logs_btn)
         world_layout.addLayout(folder_row)
         layout.addWidget(world_box)
-
-        # ----- Whitelist group -----
-        # Deliberately not an "Add Friend" text box - a one-way add-only control with
-        # no visibility into who's already on the list, or a way to remove someone,
-        # gives false confidence and still sends people back to real commands sooner
-        # or later. Management stays in Minecraft's own hands; this just makes the
-        # actual state impossible to miss, with a one-line pointer to the real fix.
-        whitelist_box = QGroupBox("Whitelist")
-        whitelist_layout = QVBoxLayout(whitelist_box)
-        self.whitelist_warning = QLabel("")
-        self.whitelist_warning.setWordWrap(True)
-        self.whitelist_warning.setStyleSheet("color: #e74c3c; font-weight: bold;")
-        whitelist_layout.addWidget(self.whitelist_warning)
-        self.whitelist_players_label = QLabel("")
-        self.whitelist_players_label.setWordWrap(True)
-        whitelist_layout.addWidget(self.whitelist_players_label)
-        hint_label = QLabel("Friends can't join? Use /whitelist commands in Minecraft.")
-        hint_label.setStyleSheet("color: #888;")
-        whitelist_layout.addWidget(hint_label)
-        layout.addWidget(whitelist_box)
 
         # ----- Memory group -----
         memory_box = QGroupBox("Memory")
@@ -281,7 +272,6 @@ class StatusPage(QWidget):
             self.tunnel_label.setText("Tunnel: -")
             self.whitelist_label.setText("Whitelist: -")
             self.whitelist_warning.setText("")
-            self.whitelist_players_label.setText("")
             self.address_label.setText("-")
             self.start_btn.setEnabled(False)
             self.stop_btn.setEnabled(False)
@@ -293,28 +283,25 @@ class StatusPage(QWidget):
         self._set_state_label(self.tunnel_label, "Tunnel", st["tunnel_running"])
         self.address_label.setText(st["join_address"] or "(not assigned yet)")
 
-        names = st["whitelist_names"]
+        name_count = len(st["whitelist_names"])
         if st["whitelist_enabled"] is None:
             self.whitelist_label.setText("Whitelist: -")
             self.whitelist_warning.setText("")
-            self.whitelist_players_label.setText("")
         elif st["whitelist_enabled"]:
             self.whitelist_label.setText(
                 f"Whitelist: <span style='color:#2ecc71; font-weight:bold;'>ON</span> "
-                f"({len(names)} player{'s' if len(names) != 1 else ''})"
+                f"({name_count} player{'s' if name_count != 1 else ''})"
             )
             self.whitelist_warning.setText("")
-            self.whitelist_players_label.setText("Whitelisted: " + (", ".join(names) if names else "no one yet"))
         else:
             self.whitelist_label.setText(
                 "Whitelist: <span style='color:#e74c3c; font-weight:bold;'>OFF</span>"
             )
             self.whitelist_warning.setText(
                 "Whitelist is OFF - your server is reachable at a public address, and anyone with a "
-                "Minecraft account can join. Turn it on with `whitelist on` (and add players below) "
-                "as soon as possible."
+                "Minecraft account can join. Run `whitelist on` and `whitelist add <username>` in the "
+                "server console or in-game as soon as possible."
             )
-            self.whitelist_players_label.setText("")
 
         both_up = st["server_running"] and st["tunnel_running"]
         both_down = not st["server_running"] and not st["tunnel_running"]
@@ -566,7 +553,7 @@ class SetupPage(QWidget):
         new_layout.addWidget(QLabel("New world name"))
         self.new_world_name_edit = QLineEdit()
         new_layout.addWidget(self.new_world_name_edit)
-        new_layout.addWidget(QLabel("Your Minecraft username (for whitelist/op - leave blank to skip)"))
+        new_layout.addWidget(QLabel("Your Minecraft username (required - the whitelist means nobody, including you, can join without it)"))
         self.owner_username_edit = QLineEdit()
         new_layout.addWidget(self.owner_username_edit)
         step2_layout.addWidget(self.new_world_box)
@@ -598,9 +585,6 @@ class SetupPage(QWidget):
         self.prepare_msg.setReadOnly(True)
         self.prepare_msg.setFixedHeight(160)
         step3_layout.addWidget(self.prepare_msg)
-        self.cheats_check = QCheckBox("Give the owner command/cheat access")
-        self.cheats_check.setChecked(True)
-        step3_layout.addWidget(self.cheats_check)
         self.finish_btn = QPushButton("Finish Setup")
         self.finish_btn.clicked.connect(self.on_finish_setup)
         step3_layout.addWidget(self.finish_btn)
@@ -695,11 +679,19 @@ class SetupPage(QWidget):
         self.loader = "fabric" if self.fabric_radio.isChecked() else "vanilla"
         generate_new = self.mode_new_radio.isChecked()
 
+        owner_username = None
         if generate_new:
             self.world_name = self.new_world_name_edit.text().strip()
             if not setup_flow.valid_new_world_name(self.world_name):
                 self.step1_msg.setText("")
                 self.loader_warning.setText('Please enter a valid world name (no \\ / : * ? " < > |).')
+                return
+            owner_username = self.owner_username_edit.text().strip()
+            if not owner_username:
+                self.step1_msg.setText("")
+                self.loader_warning.setText(
+                    "A Minecraft username is required - nobody can join a whitelisted server without one."
+                )
                 return
         else:
             self.world_name = self.world_combo.currentText()
@@ -710,7 +702,6 @@ class SetupPage(QWidget):
         self.finish_btn.setEnabled(False)
 
         if generate_new:
-            owner_username = self.owner_username_edit.text().strip()
             self._worker = Worker(setup_flow.prepare_new_world, self.instance_dir, self.world_name, owner_username)
         else:
             self._worker = Worker(setup_flow.prepare_world, self.instance_dir, self.world_name)
@@ -721,13 +712,11 @@ class SetupPage(QWidget):
         self.prepare_msg.setText("\n".join(result.lines))
         self.owner_uuid = result.data.get("owner_uuid")
         self.owner_name = result.data.get("owner_name")
-        self.cheats_check.setVisible(bool(result.data.get("whitelisted")))
         self.finish_btn.setEnabled(True)
 
     def on_finish_setup(self):
         self.finish_btn.setEnabled(False)
         self.finish_btn.setText("Setting up...")
-        allow_cheats = self.cheats_check.isChecked()
 
         self._worker = Worker(
             setup_flow.finish_setup,
@@ -737,7 +726,6 @@ class SetupPage(QWidget):
             self.loader,
             self.owner_uuid,
             self.owner_name,
-            allow_cheats,
         )
         self._worker.finished_result.connect(self._on_finish_done)
         self._worker.start()
