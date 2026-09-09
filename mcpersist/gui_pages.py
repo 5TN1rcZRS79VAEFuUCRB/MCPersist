@@ -190,13 +190,16 @@ class StatusPage(QWidget):
         self.restart_btn.setEnabled(False)
         self.action_msg.setText(f"{verb}...")
         self._worker = Worker(fn, *args)
-        self._worker.finished_result.connect(lambda _result: self._on_action_done(verb))
+        self._worker.finished_result.connect(lambda results: self._on_action_done(verb, results))
         self._worker.start()
 
-    def _on_action_done(self, verb):
-        self.action_msg.setText(f"{verb} - done.")
+    def _on_action_done(self, verb, results):
+        all_ok = all(r.ok for r in results)
+        lines = [line for r in results for line in r.lines]
+        self.action_msg.setStyleSheet("color: #888;" if all_ok else "color: #e74c3c;")
+        self.action_msg.setText(" / ".join(lines) if lines else f"{verb} - done.")
         self.refresh()
-        QTimer.singleShot(4000, lambda: self.action_msg.setText(""))
+        QTimer.singleShot(4000 if all_ok else 10000, lambda: self.action_msg.setText(""))
 
     def on_start(self):
         _, cfg, server_dir = self.current_status()
@@ -204,8 +207,7 @@ class StatusPage(QWidget):
             return
 
         def do_start():
-            actions.start_server(cfg, server_dir)
-            actions.start_tunnel(cfg, server_dir)
+            return [actions.start_server(cfg, server_dir), actions.start_tunnel(cfg, server_dir)]
 
         self._run_blocking("Starting", do_start)
 
@@ -215,8 +217,7 @@ class StatusPage(QWidget):
             return
 
         def do_stop():
-            actions.stop_server(cfg, server_dir)
-            actions.stop_tunnel(server_dir)
+            return [actions.stop_server(cfg, server_dir), actions.stop_tunnel(server_dir)]
 
         self._run_blocking("Stopping", do_stop)
 
@@ -226,10 +227,12 @@ class StatusPage(QWidget):
             return
 
         def do_restart():
-            actions.stop_server(cfg, server_dir)
-            actions.stop_tunnel(server_dir)
-            actions.start_server(cfg, server_dir)
-            actions.start_tunnel(cfg, server_dir)
+            return [
+                actions.stop_server(cfg, server_dir),
+                actions.stop_tunnel(server_dir),
+                actions.start_server(cfg, server_dir),
+                actions.start_tunnel(cfg, server_dir),
+            ]
 
         self._run_blocking("Restarting", do_restart)
 

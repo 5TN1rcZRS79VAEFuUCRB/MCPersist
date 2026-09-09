@@ -28,7 +28,9 @@ DEFAULTS = {
 def load():
     if not CONFIG_PATH.exists():
         return dict(DEFAULTS)
-    data = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+    # utf-8-sig transparently strips a BOM if present (e.g. from Notepad) without
+    # affecting plain utf-8 files, so hand-edited config.json can't crash startup.
+    data = json.loads(CONFIG_PATH.read_text(encoding="utf-8-sig"))
     merged = dict(DEFAULTS)
     merged.update(data)
     return merged
