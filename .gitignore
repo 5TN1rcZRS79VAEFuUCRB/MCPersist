@@ -6,6 +6,7 @@ relay/auto_assignments.json
 # Runtime data - world saves, downloaded server jars, logs
 servers/
 bin/
+gui.pid
 
 # Python
 __pycache__/

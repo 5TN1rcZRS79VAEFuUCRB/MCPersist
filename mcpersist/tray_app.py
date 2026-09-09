@@ -1,14 +1,23 @@
 """The GUI's entry point: the main window (see gui_pages.py for its screens) plus
 the system tray icon it minimizes to."""
 
+import ctypes
+import os
 import sys
 
 from PySide6.QtCore import QTimer
 from PySide6.QtGui import QAction, QColor, QIcon, QPainter, QPixmap
 from PySide6.QtWidgets import QApplication, QMainWindow, QMenu, QStackedWidget, QSystemTrayIcon
 
-from . import actions, config
+from . import actions, config, process_manager
 from .gui_pages import SetupPage, StatusPage
+from .paths import BASE_DIR
+
+# Minimizing to tray means the window can be running with nothing visible to remind
+# you of that - easy to forget and double-click the exe again. A second instance
+# racing the first to start the server (or just showing stale/conflicting state)
+# is exactly the kind of confusing mess this avoids.
+GUI_PID_PATH = BASE_DIR / "gui.pid"
 
 COLORS = {
     "running": QColor(46, 204, 113),
@@ -132,8 +141,20 @@ class MainWindow(QMainWindow):
 
 
 def main():
+    if process_manager.is_running(process_manager.read_pid(GUI_PID_PATH)):
+        ctypes.windll.user32.MessageBoxW(
+            0,
+            "MCPersist is already running - check your system tray (it may be in the "
+            "hidden icons area, near the clock).",
+            "MCPersist",
+            0x40,  # MB_ICONINFORMATION
+        )
+        return
+    process_manager.write_pid(GUI_PID_PATH, os.getpid())
+
     app = QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(False)
+    app.aboutToQuit.connect(lambda: GUI_PID_PATH.unlink(missing_ok=True))
     window = MainWindow()
     window.show()
     sys.exit(app.exec())
