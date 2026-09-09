@@ -28,6 +28,14 @@ common for small, unsigned open-source tools and not evidence of anything malici
 The source is fully here in this repo if you'd rather verify or build it yourself; see
 [Building from source](#building-from-source).
 
+## Updating
+
+MCPersist checks GitHub for a newer release once when it starts up. If one's out, a
+banner with an **Update Now** button shows up on the status screen - click it and it
+downloads, installs, and restarts itself, no manual re-download needed. This only
+applies to the packaged `.exe`; running from source, use `git pull` instead (`run.bat
+check-update` will tell you if there's anything new either way).
+
 ## Whitelist & adding friends
 
 Setup auto-detects the world's owner from the save file and whitelists just them -
@@ -140,6 +148,8 @@ mcpersist/
   rcon.py                  minimal RCON client (graceful server stop, admin commands)
   config.py               config.json load/save, RAM/view-distance auto-sizing
   autostart.py            start-on-login (Task Scheduler or Startup-folder fallback)
+  version.py               the app's own version, compared against GitHub releases
+  update_checker.py        checks for/applies updates to the packaged .exe
 
 relay/                  runs on a VPS you control - see relay/README.md
   relay_server.py        the relay: routes connections by subdomain, pipes bytes

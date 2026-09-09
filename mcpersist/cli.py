@@ -6,8 +6,9 @@ import subprocess
 import sys
 from pathlib import Path
 
-from . import actions, autostart, config, setup_flow
+from . import actions, autostart, config, setup_flow, update_checker
 from .paths import BASE_DIR
+from .version import VERSION
 
 
 def prompt(msg, default=None):
@@ -238,6 +239,21 @@ def cmd_tray(args):
     return 0
 
 
+def cmd_check_update(args):
+    print(f"Running version: {VERSION}")
+    result = update_checker.check_latest_release()
+    if not result:
+        print("You're on the latest version (or the check failed - see below if something looks wrong).")
+        return 0
+    print(f"A newer version is available: {result['version']}")
+    print(f"  {result['release_url']}")
+    print(
+        "Running from source: `git pull` to update instead of downloading - self-update "
+        "only applies to the packaged .exe, which you'll find in Releases."
+    )
+    return 0
+
+
 def build_parser():
     parser = argparse.ArgumentParser(prog="mcpersist")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -258,6 +274,8 @@ def build_parser():
     p_wl = sub.add_parser("whitelist-add", help="Add a player to the whitelist (works whether or not the server is running)")
     p_wl.add_argument("username")
     p_wl.set_defaults(func=cmd_whitelist_add)
+
+    sub.add_parser("check-update", help="Check GitHub for a newer release").set_defaults(func=cmd_check_update)
 
     sub.add_parser("configure-relay", help="Set up your self-hosted relay subdomain + token").set_defaults(
         func=cmd_configure_relay

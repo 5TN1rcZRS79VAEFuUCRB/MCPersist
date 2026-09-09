@@ -22,7 +22,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtGui import QGuiApplication
 
-from . import actions, config, setup_flow
+from . import actions, config, setup_flow, update_checker
 from .gui_worker import Worker
 from .paths import BASE_DIR
 
@@ -39,6 +39,21 @@ class StatusPage(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(16, 16, 16, 16)
         layout.setSpacing(14)
+
+        # ----- Update banner (hidden unless an update is actually found) -----
+        self.update_box = QWidget()
+        update_row = QHBoxLayout(self.update_box)
+        update_row.setContentsMargins(0, 0, 0, 0)
+        self.update_label = QLabel("")
+        self.update_label.setStyleSheet("color: #2ecc71; font-weight: bold;")
+        update_row.addWidget(self.update_label, 1)
+        self.update_btn = QPushButton("Update Now")
+        self.update_btn.setFixedWidth(110)
+        self.update_btn.clicked.connect(self.on_update_now)
+        update_row.addWidget(self.update_btn)
+        self.update_box.setVisible(False)
+        layout.addWidget(self.update_box)
+        self._pending_update = None
 
         # ----- Status group -----
         status_box = QGroupBox()
@@ -201,6 +216,49 @@ class StatusPage(QWidget):
         self.timer.timeout.connect(self.refresh)
         self.timer.start(4000)
         self.refresh()
+
+        # Checked once on startup, not on every poll - a GitHub API call every 4s
+        # would be wasteful and risks hitting its rate limit for no benefit.
+        self._update_worker = Worker(update_checker.check_latest_release)
+        self._update_worker.finished_result.connect(self._on_update_check_done)
+        self._update_worker.start()
+
+    def _on_update_check_done(self, result):
+        if not result:
+            return
+        self._pending_update = result
+        self.update_label.setText(f"MCPersist {result['version']} is available.")
+        self.update_box.setVisible(True)
+
+    @staticmethod
+    def _do_apply_update(download_url):
+        # Worker doesn't catch exceptions from the function it runs, and apply_update
+        # raises on failure (network error, not a frozen build, etc.) - turn that into
+        # a plain return value instead, same shape as everything else Worker calls.
+        try:
+            update_checker.apply_update(download_url)
+            return None
+        except Exception as e:
+            return str(e)
+
+    def on_update_now(self):
+        if not self._pending_update:
+            return
+        self.update_btn.setEnabled(False)
+        self.update_label.setStyleSheet("color: #2ecc71; font-weight: bold;")
+        self.update_label.setText("Downloading update...")
+        self._update_apply_worker = Worker(self._do_apply_update, self._pending_update["download_url"])
+        self._update_apply_worker.finished_result.connect(self._on_update_applied)
+        self._update_apply_worker.start()
+
+    def _on_update_applied(self, error):
+        if error is not None:
+            self.update_btn.setEnabled(True)
+            self.update_label.setStyleSheet("color: #e74c3c; font-weight: bold;")
+            self.update_label.setText(f"Update failed: {error}")
+            return
+        self.update_label.setText("Update downloaded - restarting...")
+        self.window().quit_app()
 
     def current_status(self):
         cfg = config.load()
