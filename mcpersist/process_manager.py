@@ -58,6 +58,14 @@ def read_pid(pid_path):
 
 
 def is_running(pid):
+    # Known limitation: this only checks that *some* process currently has this PID,
+    # not that it's actually the one a *.pid file originally recorded - Windows can
+    # reuse a PID once the original process exits. On a single-user desktop machine
+    # this is rare enough (Windows doesn't reuse PIDs aggressively) not to be worth
+    # the added complexity of verifying process identity (name/start time) at every
+    # call site, but it's a real, understood gap, not an oversight - a stale pid file
+    # coinciding with a reused PID could make an already-exited server/tunnel/GUI
+    # instance look "running" until the file is manually cleared.
     if pid is None:
         return False
     try:

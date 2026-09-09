@@ -11,6 +11,7 @@ import sys
 import tempfile
 import zipfile
 from pathlib import Path
+from urllib.parse import urlparse
 
 import requests
 
@@ -19,6 +20,12 @@ from .version import VERSION
 
 REPO = "5TN1rcZRS79VAEFuUCRB/MCPersist"
 LATEST_RELEASE_API = f"https://api.github.com/repos/{REPO}/releases/latest"
+
+# GitHub redirects release-asset downloads through one of these; apply_update() only
+# ever downloads from a URL GitHub's own API just handed us, but checking the host
+# before fetching is a cheap, real guard against ever downloading-and-running
+# something from wherever a URL happened to come from.
+ALLOWED_DOWNLOAD_HOSTS = {"github.com", "objects.githubusercontent.com", "release-assets.githubusercontent.com"}
 
 
 def _parse_version(v):
@@ -64,6 +71,27 @@ def _validate_zip_entries(zf, dest_dir):
             raise ValueError(f"refusing to extract {member.filename!r} - escapes the install directory")
 
 
+# Static - every path/pid is passed in as a real process argument (see apply_update),
+# never interpolated into this text. Building the equivalent command as a string
+# (the previous approach) meant a single quote anywhere in the install path or a
+# Windows username - "C:\Users\O'Brien\..." is a completely ordinary path - would
+# break the quoting and could turn into something other than the intended command.
+_UPDATER_PS1 = """param(
+    [int]$ProcPid,
+    [string]$ZipPath,
+    [string]$DestDir,
+    [string]$ExePath
+)
+while (Get-Process -Id $ProcPid -ErrorAction SilentlyContinue) {
+    Start-Sleep -Seconds 1
+}
+Expand-Archive -LiteralPath $ZipPath -DestinationPath $DestDir -Force
+Start-Process -FilePath $ExePath
+Remove-Item -LiteralPath $ZipPath -Force -ErrorAction SilentlyContinue
+Remove-Item -LiteralPath $PSCommandPath -Force -ErrorAction SilentlyContinue
+"""
+
+
 def apply_update(download_url):
     """Downloads the release zip, validates it, then launches a detached updater
     script and returns - the caller is expected to exit right after so the updater
@@ -71,6 +99,10 @@ def apply_update(download_url):
     .exe (a fixed install directory to overwrite); raises if called from source."""
     if not getattr(sys, "frozen", False):
         raise RuntimeError("Self-update only applies to the packaged .exe - use `git pull` for a source install.")
+
+    host = urlparse(download_url).hostname
+    if host not in ALLOWED_DOWNLOAD_HOSTS:
+        raise ValueError(f"refusing to download from unexpected host {host!r}")
 
     tmp_dir = Path(tempfile.gettempdir())
     zip_path = tmp_dir / "mcpersist_update.zip"
@@ -84,25 +116,26 @@ def apply_update(download_url):
         _validate_zip_entries(zf, BASE_DIR)
 
     exe_path = str(BASE_DIR / "MCPersist.exe")
-    pid = os.getpid()
-    updater_script = tmp_dir / "mcpersist_updater.bat"
-    updater_script.write_text(
-        "@echo off\r\n"
-        ":wait\r\n"
-        f'tasklist /FI "PID eq {pid}" 2>NUL | find "{pid}" >NUL\r\n'
-        "if not errorlevel 1 (\r\n"
-        "    timeout /t 1 /nobreak >NUL\r\n"
-        "    goto wait\r\n"
-        ")\r\n"
-        f'powershell -NoProfile -Command "Expand-Archive -LiteralPath \'{zip_path}\' '
-        f"-DestinationPath '{BASE_DIR}' -Force\"\r\n"
-        f'start "" "{exe_path}"\r\n'
-        f'del "{zip_path}"\r\n'
-        'del "%~f0"\r\n',
-        encoding="utf-8",
-    )
+    updater_script = tmp_dir / "mcpersist_updater.ps1"
+    updater_script.write_text(_UPDATER_PS1, encoding="utf-8")
+
     subprocess.Popen(
-        ["cmd", "/c", str(updater_script)],
+        [
+            "powershell",
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            str(updater_script),
+            "-ProcPid",
+            str(os.getpid()),
+            "-ZipPath",
+            str(zip_path),
+            "-DestDir",
+            str(BASE_DIR),
+            "-ExePath",
+            exe_path,
+        ],
         creationflags=subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS,
         close_fds=True,
     )
