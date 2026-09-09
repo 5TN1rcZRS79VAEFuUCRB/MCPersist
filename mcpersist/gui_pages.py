@@ -22,7 +22,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtGui import QGuiApplication
 
-from . import actions, config, setup_flow, update_checker
+from . import actions, config, server_vanilla, setup_flow, update_checker
 from .gui_worker import Worker
 from .paths import BASE_DIR
 
@@ -486,6 +486,11 @@ class SetupPage(QWidget):
     done = Signal()
     cancelled = Signal()
 
+    # Shared across every SetupPage visit within one app run - the version list
+    # doesn't change while the app is open, so there's no reason to re-fetch it each
+    # time the wizard is opened/closed.
+    _version_list_cache = None
+
     def __init__(self):
         super().__init__()
         self._worker = None
@@ -495,6 +500,8 @@ class SetupPage(QWidget):
         self.loader = None
         self.owner_uuid = None
         self.owner_name = None
+        self._version_worker = None
+        self._pending_version_selection = None
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(16, 16, 16, 16)
@@ -529,13 +536,17 @@ class SetupPage(QWidget):
         mode_row = QHBoxLayout()
         self.mode_existing_radio = QRadioButton("Select Existing World")
         self.mode_new_radio = QRadioButton("Generate New World")
+        self.mode_switch_radio = QRadioButton("Switch to a Previous Server")
         self.mode_existing_radio.setChecked(True)
         self.mode_group = QButtonGroup(self)
         self.mode_group.addButton(self.mode_existing_radio)
         self.mode_group.addButton(self.mode_new_radio)
+        self.mode_group.addButton(self.mode_switch_radio)
         self.mode_existing_radio.toggled.connect(self.on_mode_changed)
+        self.mode_switch_radio.toggled.connect(self.on_mode_changed)
         mode_row.addWidget(self.mode_existing_radio)
         mode_row.addWidget(self.mode_new_radio)
+        mode_row.addWidget(self.mode_switch_radio)
         step2_layout.addLayout(mode_row)
 
         self.existing_world_box = QWidget()
@@ -559,22 +570,44 @@ class SetupPage(QWidget):
         step2_layout.addWidget(self.new_world_box)
         self.new_world_box.setVisible(False)
 
-        step2_layout.addWidget(QLabel("Minecraft version"))
-        self.mc_version_edit = QLineEdit()
-        step2_layout.addWidget(self.mc_version_edit)
+        # Servers MCPersist has already set up before (scanned from servers/ itself,
+        # not tracked separately) - picking one just repoints config.json at it using
+        # its own saved settings, no re-download or owner-detection needed since all
+        # of that already happened the first time it was set up.
+        self.switch_world_box = QWidget()
+        switch_layout = QVBoxLayout(self.switch_world_box)
+        switch_layout.setContentsMargins(0, 0, 0, 0)
+        switch_layout.addWidget(QLabel("Previously set-up server"))
+        self.switch_world_combo = QComboBox()
+        switch_layout.addWidget(self.switch_world_combo)
+        self.switch_world_msg = QLabel("")
+        self.switch_world_msg.setWordWrap(True)
+        self.switch_world_msg.setStyleSheet("color: #888;")
+        switch_layout.addWidget(self.switch_world_msg)
+        step2_layout.addWidget(self.switch_world_box)
+        self.switch_world_box.setVisible(False)
+
+        self.version_loader_box = QWidget()
+        version_loader_layout = QVBoxLayout(self.version_loader_box)
+        version_loader_layout.setContentsMargins(0, 0, 0, 0)
+        version_loader_layout.addWidget(QLabel("Minecraft version"))
+        self.mc_version_combo = QComboBox()
+        version_loader_layout.addWidget(self.mc_version_combo)
         loader_row = QHBoxLayout()
         self.vanilla_radio = QRadioButton("Vanilla")
         self.fabric_radio = QRadioButton("Fabric")
         loader_row.addWidget(self.vanilla_radio)
         loader_row.addWidget(self.fabric_radio)
-        step2_layout.addLayout(loader_row)
+        version_loader_layout.addLayout(loader_row)
+        step2_layout.addWidget(self.version_loader_box)
+
         self.loader_warning = QLabel("")
         self.loader_warning.setWordWrap(True)
         self.loader_warning.setStyleSheet("color: #b45309;")
         step2_layout.addWidget(self.loader_warning)
-        continue_btn = QPushButton("Continue")
-        continue_btn.clicked.connect(self.on_prepare_world)
-        step2_layout.addWidget(continue_btn)
+        self.continue_btn = QPushButton("Continue")
+        self.continue_btn.clicked.connect(self.on_prepare_world)
+        step2_layout.addWidget(self.continue_btn)
         self.step2_box.setVisible(False)
         layout.addWidget(self.step2_box)
 
@@ -646,17 +679,41 @@ class SetupPage(QWidget):
 
     def on_mode_changed(self):
         is_existing = self.mode_existing_radio.isChecked()
+        is_switch = self.mode_switch_radio.isChecked()
+        is_new = self.mode_new_radio.isChecked()
+
         self.existing_world_box.setVisible(is_existing)
-        self.new_world_box.setVisible(not is_existing)
-        if is_existing:
+        self.new_world_box.setVisible(is_new)
+        self.switch_world_box.setVisible(is_switch)
+        self.version_loader_box.setVisible(not is_switch)
+        self.loader_warning.setVisible(not is_switch)
+        self.continue_btn.setText("Switch" if is_switch else "Continue")
+
+        if is_switch:
+            self._populate_switch_world_combo()
+        elif is_existing:
             self.on_world_selected(self.world_combo.currentText())
-        elif self.instance_dir:
+        elif is_new and self.instance_dir:
             info = setup_flow.detect_new_world_info(self.instance_dir)
             self._apply_detected_loader(info)
 
+    def _populate_switch_world_combo(self):
+        self.switch_world_combo.clear()
+        servers = setup_flow.list_known_servers()
+        if not servers:
+            self.switch_world_combo.addItem("(no previously set-up servers found)")
+            self.switch_world_combo.setEnabled(False)
+            self.switch_world_msg.setText("")
+            return
+        self.switch_world_combo.setEnabled(True)
+        for server in servers:
+            label = f"{server['world_name']} ({server['loader']} {server['mc_version']})"
+            self.switch_world_combo.addItem(label, server["world_name"])
+        self.switch_world_msg.setText("Switches immediately - no download or setup needed.")
+
     def _apply_detected_loader(self, info):
         suggested = info["suggested_loader"]
-        self.mc_version_edit.setText(info["mc_version"] or "")
+        self._select_version(info["mc_version"])
         self.vanilla_radio.setChecked(suggested == "vanilla")
         self.fabric_radio.setChecked(suggested == "fabric")
         if suggested in ("forge", "neoforge"):
@@ -668,6 +725,42 @@ class SetupPage(QWidget):
         else:
             self.loader_warning.setText("")
 
+    def _select_version(self, detected_version):
+        """Populates (and caches) the version dropdown from Mojang's manifest, then
+        selects detected_version in it if present. Fetching happens once per app run
+        and in the background - switching worlds/modes while it's still loading just
+        updates which version gets selected once it finishes."""
+        self._pending_version_selection = detected_version
+        if SetupPage._version_list_cache is not None:
+            self._populate_version_combo(SetupPage._version_list_cache)
+            return
+        if self._version_worker is not None:
+            return
+        self.mc_version_combo.clear()
+        self.mc_version_combo.addItem("Loading versions...")
+        self.mc_version_combo.setEnabled(False)
+        self._version_worker = Worker(server_vanilla.list_release_versions)
+        self._version_worker.finished_result.connect(self._on_version_list_loaded)
+        self._version_worker.start()
+
+    def _on_version_list_loaded(self, versions):
+        self._version_worker = None
+        SetupPage._version_list_cache = versions or []
+        self._populate_version_combo(SetupPage._version_list_cache)
+
+    def _populate_version_combo(self, versions):
+        self.mc_version_combo.setEnabled(True)
+        self.mc_version_combo.clear()
+        if not versions:
+            # Offline / the fetch failed - fall back to whatever was already
+            # detected (if anything) so setup can still proceed without network
+            # access to Mojang's manifest, rather than leaving an empty dropdown.
+            self.mc_version_combo.addItem(self._pending_version_selection or "1.21")
+            return
+        self.mc_version_combo.addItems(versions)
+        if self._pending_version_selection and self._pending_version_selection in versions:
+            self.mc_version_combo.setCurrentText(self._pending_version_selection)
+
     def on_world_selected(self, world_name):
         if not world_name:
             return
@@ -675,7 +768,19 @@ class SetupPage(QWidget):
         self._apply_detected_loader(info)
 
     def on_prepare_world(self):
-        self.mc_version = self.mc_version_edit.text()
+        if self.mode_switch_radio.isChecked():
+            world_name = self.switch_world_combo.currentData()
+            if not world_name:
+                return
+            self.step2_box.setVisible(False)
+            self.step4_box.setVisible(True)
+            self.finish_msg.setText("Switching...")
+            self._worker = Worker(setup_flow.switch_to_world, world_name)
+            self._worker.finished_result.connect(self._on_switch_done)
+            self._worker.start()
+            return
+
+        self.mc_version = self.mc_version_combo.currentText()
         self.loader = "fabric" if self.fabric_radio.isChecked() else "vanilla"
         generate_new = self.mode_new_radio.isChecked()
 
@@ -713,6 +818,9 @@ class SetupPage(QWidget):
         self.owner_uuid = result.data.get("owner_uuid")
         self.owner_name = result.data.get("owner_name")
         self.finish_btn.setEnabled(True)
+
+    def _on_switch_done(self, result):
+        self.finish_msg.setText("\n".join(result.lines))
 
     def on_finish_setup(self):
         self.finish_btn.setEnabled(False)

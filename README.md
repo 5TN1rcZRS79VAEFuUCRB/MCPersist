@@ -14,10 +14,15 @@ comes back automatically after a reboot (as long as your PC is on).
 1. Download `MCPersist-windows.zip` from [Releases](../../releases) and extract it.
 2. Run `MCPersist.exe` inside the extracted folder. Click **Set Up New World**, pick
    your Minecraft instance folder, then either select one of your existing
-   singleplayer worlds to promote or generate a brand-new one from scratch, and
-   follow the wizard - the right Java version downloads automatically if you don't
-   already have it, no separate install needed.
+   singleplayer worlds to promote, generate a brand-new one from scratch, or switch
+   to a server you've already set up before (instant, no re-download), and follow the
+   wizard - the right Java version downloads automatically if you don't already have
+   it, no separate install needed.
 3. Click **Start**. The join address shown is what you give your friends.
+
+Set up more than one world over time? Every server you've made stays around - open
+**Set Up New World** again and pick **Switch to a Previous Server** to jump between
+them instantly, without re-downloading anything.
 
 No Python install needed for this path - everything's bundled into the folder.
 

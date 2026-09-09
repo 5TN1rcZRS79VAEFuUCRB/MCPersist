@@ -298,6 +298,7 @@ def finish_setup(instance_dir, world_name, mc_version, loader, owner_uuid, owner
     write_eula(server_dir)
     write_server_properties(server_dir, cfg, enable_whitelist=bool(owner_uuid and owner_name))
     config.save(cfg)
+    write_world_meta(server_dir, cfg)
 
     lines.append(
         f"View/simulation distance set to {config.ensure_view_distance(cfg)}/"
@@ -306,6 +307,99 @@ def finish_setup(instance_dir, world_name, mc_version, loader, owner_uuid, owner
     )
     lines.append("Setup complete.")
     return ActionResult(True, lines)
+
+
+WORLD_META_FIELDS = (
+    "instance_dir",
+    "loader",
+    "mc_version",
+    "memory_auto",
+    "memory_mb",
+    "performance_auto",
+    "view_distance",
+    "simulation_distance",
+)
+
+
+def write_world_meta(server_dir, cfg):
+    """Snapshots the settings needed to make this world the active one again later
+    without re-running setup - everything else (rcon port/password, whitelist state)
+    already lives in this world's own server.properties/whitelist.json, so it doesn't
+    need to be duplicated here too."""
+    meta = {field: cfg.get(field) for field in WORLD_META_FIELDS}
+    (Path(server_dir) / "mcpersist_meta.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
+
+
+def _backfill_active_world_meta():
+    """A world set up before mcpersist_meta.json existed won't show up in
+    list_known_servers() - there's no way to recover settings for a world that isn't
+    the currently active one, since config.json only ever reflects whichever world is
+    active right now. But the currently active world's settings are sitting right
+    there in config.json, so if its server directory is missing metadata, write it now
+    rather than leaving it invisible to "switch to a previous server" forever."""
+    cfg = config.load()
+    world_name = cfg.get("world_name")
+    if not world_name:
+        return
+    server_dir = SERVERS_DIR / world_name
+    if server_dir.exists() and not (server_dir / "mcpersist_meta.json").exists():
+        write_world_meta(server_dir, cfg)
+
+
+def list_known_servers():
+    """Every world MCPersist has set up before, discovered by scanning servers/
+    itself rather than tracked in a separate registry - the filesystem is already the
+    source of truth, so this can't go stale relative to what's actually there."""
+    if not SERVERS_DIR.exists():
+        return []
+    _backfill_active_world_meta()
+    found = []
+    for entry in sorted(SERVERS_DIR.iterdir()):
+        meta_path = entry / "mcpersist_meta.json"
+        if not entry.is_dir() or not meta_path.exists():
+            continue
+        try:
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            continue
+        found.append(
+            {"world_name": entry.name, "loader": meta.get("loader"), "mc_version": meta.get("mc_version")}
+        )
+    return found
+
+
+def switch_to_world(world_name):
+    """Makes a previously set-up world the active one - just repoints config.json at
+    it using its own saved metadata (see write_world_meta) plus the rcon port/password
+    already sitting in its server.properties. No re-download or owner-detection,
+    since all of that already happened the first time this world was set up."""
+    server_dir = SERVERS_DIR / world_name
+    meta_path = server_dir / "mcpersist_meta.json"
+    if not meta_path.exists():
+        return ActionResult(
+            False, [f"{world_name!r} doesn't look like a world MCPersist set up (no saved settings found)."]
+        )
+    try:
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError) as e:
+        return ActionResult(False, [f"Couldn't read {world_name!r}'s saved settings: {e}"])
+
+    cfg = config.load()
+    cfg["world_name"] = world_name
+    for field in WORLD_META_FIELDS:
+        if field in meta:
+            cfg[field] = meta[field]
+
+    props_path = server_dir / "server.properties"
+    if props_path.exists():
+        for line in props_path.read_text(encoding="utf-8", errors="replace").splitlines():
+            if line.strip().startswith("rcon.port="):
+                cfg["rcon_port"] = int(line.split("=", 1)[1].strip() or cfg["rcon_port"])
+            elif line.strip().startswith("rcon.password="):
+                cfg["rcon_password"] = line.split("=", 1)[1].strip() or cfg["rcon_password"]
+
+    config.save(cfg)
+    return ActionResult(True, [f"Switched to {world_name!r}."])
 
 
 def configure_relay(relay_host, control_port, data_port, subdomain, token, public_domain):

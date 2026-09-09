@@ -6,6 +6,19 @@ import requests
 VERSION_MANIFEST_URL = "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json"
 
 
+def list_release_versions():
+    """Release-type Minecraft versions from Mojang's manifest, newest first - powers
+    the setup wizard's version dropdown. Excludes snapshots/betas/alphas, which
+    aren't a good fit for what's meant to be a persistent server. Returns [] (not an
+    exception) on any failure - callers fall back to whatever version was already
+    detected, if any, so a network hiccup doesn't block setup entirely."""
+    try:
+        manifest = requests.get(VERSION_MANIFEST_URL, timeout=30).json()
+        return [v["id"] for v in manifest["versions"] if v.get("type") == "release"]
+    except Exception:
+        return []
+
+
 def get_version_meta(mc_version):
     manifest = requests.get(VERSION_MANIFEST_URL, timeout=30).json()
     entry = next((v for v in manifest["versions"] if v["id"] == mc_version), None)

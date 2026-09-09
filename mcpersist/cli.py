@@ -6,7 +6,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from . import actions, autostart, config, setup_flow, update_checker
+from . import actions, autostart, config, server_vanilla, setup_flow, update_checker
 from .paths import BASE_DIR
 from .version import VERSION
 
@@ -41,6 +41,24 @@ def _prompt_loader(suggested_loader):
     return ["vanilla", "fabric"][loader_idx]
 
 
+def _prompt_version(default_version):
+    versions = server_vanilla.list_release_versions()
+    if not versions:
+        # Offline / the fetch failed - can't validate against anything, so just take
+        # whatever they type rather than blocking setup entirely.
+        return prompt("Minecraft version (e.g. 1.20.4)", default_version)
+    default_version = default_version if default_version in versions else versions[0]
+    while True:
+        answer = prompt('Minecraft version to use (type "list" to see recent ones)', default_version)
+        if answer in versions:
+            return answer
+        if answer.strip().lower() == "list":
+            shown = versions[:20]
+            print(", ".join(shown) + (", ..." if len(versions) > len(shown) else ""))
+            continue
+        print(f"{answer!r} isn't a recognized release version.")
+
+
 def cmd_setup(args):
     instance_dir = args.instance_dir or setup_flow.default_instance_dir()
     instance_dir = prompt("Minecraft instance folder", instance_dir)
@@ -51,11 +69,24 @@ def cmd_setup(args):
     if not worlds_result.ok:
         return 1
     worlds = worlds_result.data["worlds"]
+    known_servers = setup_flow.list_known_servers()
 
-    generate_new = True
-    if worlds:
-        mode_idx = prompt_choice("What do you want to do?", ["Select an existing world", "Generate a new world"])
-        generate_new = mode_idx == 1
+    choices = ["Select an existing world", "Generate a new world"]
+    if known_servers:
+        choices.append("Switch to a previously set-up server")
+    mode_idx = 1
+    if worlds or known_servers:
+        mode_idx = prompt_choice("What do you want to do?", choices)
+
+    if mode_idx == 2:
+        labels = [f"{s['world_name']} ({s['loader']} {s['mc_version']})" for s in known_servers]
+        idx = prompt_choice("Pick a server to switch to", labels)
+        result = setup_flow.switch_to_world(known_servers[idx]["world_name"])
+        for line in result.lines:
+            print(line)
+        return 0 if result.ok else 1
+
+    generate_new = mode_idx == 1
 
     if generate_new:
         world_name = prompt("Name for the new world")
@@ -63,7 +94,7 @@ def cmd_setup(args):
             world_name = prompt('Please enter a valid name (no \\ / : * ? " < > |)')
 
         info = setup_flow.detect_new_world_info(instance_dir)
-        mc_version = prompt("Minecraft version to generate (e.g. 1.20.4)", info["mc_version"])
+        mc_version = _prompt_version(info["mc_version"])
         loader = _prompt_loader(info["suggested_loader"])
         owner_username = prompt("Your Minecraft username (required - the whitelist means nobody can join without it)")
         while not owner_username or not owner_username.strip():
@@ -80,11 +111,7 @@ def cmd_setup(args):
         world_name = worlds[idx]
 
         info = setup_flow.detect_world_info(instance_dir, world_name)
-        mc_version = info["mc_version"]
-        if not mc_version:
-            mc_version = prompt("Couldn't auto-detect the Minecraft version, please enter it (e.g. 1.20.4)")
-        else:
-            print(f"Detected Minecraft version: {mc_version}")
+        mc_version = _prompt_version(info["mc_version"])
         loader = _prompt_loader(info["suggested_loader"])
 
         print()
