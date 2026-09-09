@@ -14,6 +14,7 @@ from users import load_users, verify
 from auto_assignments import load_assignments, save_assignments
 
 CONNECT_TIMEOUT = 10
+HANDSHAKE_TIMEOUT = 10  # a client that never finishes its handshake shouldn't hold a connection open forever
 MAX_AUTO_CONNECTIONS_PER_IP = 3
 
 clients = {}  # subdomain -> StreamWriter of the control connection
@@ -67,7 +68,7 @@ async def handle_control(reader, writer):
     is_auto = False
     peer_ip = (writer.get_extra_info("peername") or (None,))[0]
     try:
-        line = await reader.readline()
+        line = await asyncio.wait_for(reader.readline(), timeout=HANDSHAKE_TIMEOUT)
         if not line:
             return
         msg = json.loads(line.decode("utf-8"))
@@ -113,7 +114,7 @@ async def handle_control(reader, writer):
             data = await reader.readline()
             if not data:
                 break
-    except (asyncio.IncompleteReadError, ConnectionResetError, json.JSONDecodeError):
+    except (asyncio.IncompleteReadError, asyncio.TimeoutError, ConnectionResetError, json.JSONDecodeError):
         pass
     finally:
         if subdomain and clients.get(subdomain) is writer:
@@ -128,7 +129,7 @@ async def handle_control(reader, writer):
 
 async def handle_data(reader, writer):
     try:
-        line = await reader.readline()
+        line = await asyncio.wait_for(reader.readline(), timeout=HANDSHAKE_TIMEOUT)
         if not line:
             writer.close()
             return
@@ -163,7 +164,7 @@ async def pipe(reader, writer):
 async def handle_public(reader, writer):
     peer = writer.get_extra_info("peername")
     try:
-        raw, server_address = await read_handshake(reader)
+        raw, server_address = await asyncio.wait_for(read_handshake(reader), timeout=HANDSHAKE_TIMEOUT)
     except Exception:
         writer.close()
         return

@@ -2,6 +2,12 @@
 to learn the hostname a connecting client typed, for subdomain-based routing."""
 
 
+# Real handshake packets are a few dozen bytes; this just needs to be generous enough
+# for a long hostname, not a limit an attacker can use to make us buffer megabytes
+# from a connection that never sends any real data.
+MAX_HANDSHAKE_LENGTH = 2048
+
+
 def _read_varint_from_bytes(data, pos):
     num = 0
     for i in range(5):
@@ -42,6 +48,9 @@ async def read_handshake(reader):
             break
     else:
         raise ValueError("VarInt too big")
+
+    if length > MAX_HANDSHAKE_LENGTH:
+        raise ValueError(f"handshake packet too large ({length} bytes)")
 
     payload = await reader.readexactly(length)
     raw = bytes(length_bytes) + payload

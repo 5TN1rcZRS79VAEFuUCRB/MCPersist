@@ -3,7 +3,7 @@
 A tool for turning a singleplayer Minecraft world into a real standalone dedicated
 server, running independently of the game client, with a **persistent** join address
 (via a relay - see [`relay/`](relay/)) that stays the same across restarts. Inspired
-by [e4mc](https://github.com/e4mc/e4mc), whose tunneled address is tied to the game
+by [e4mc](https://modrinth.com/mod/e4mc), whose tunneled address is tied to the game
 client's own session and resets whenever you close it.
 
 The server keeps running after you close Minecraft. With autostart enabled, it also

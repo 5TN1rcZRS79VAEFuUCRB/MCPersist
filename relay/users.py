@@ -1,6 +1,7 @@
 """Loads/saves the reserved subdomain -> token registry (users.json), managed by
 admin_cli.py and checked by relay_server.py during registration."""
 
+import hmac
 import json
 from pathlib import Path
 
@@ -31,4 +32,6 @@ def remove_user(subdomain):
 
 def verify(subdomain, token):
     entry = load_users().get(subdomain)
-    return entry is not None and entry.get("token") == token
+    if entry is None or not token:
+        return False
+    return hmac.compare_digest(entry.get("token", ""), token)
