@@ -19,13 +19,29 @@ def start_server(cfg, server_dir):
         return ActionResult(True, ["Server already running."])
 
     java_path = javacheck.find_java(cfg["java_path"])
+    required = world.required_java_major(cfg["mc_version"], instance_dir=cfg.get("instance_dir"))
     if not java_path:
-        required = world.required_java_major(cfg["mc_version"], instance_dir=cfg.get("instance_dir"))
         return ActionResult(
             False,
             [
                 f"Java not found on PATH (Minecraft {cfg['mc_version']} needs Java {required}).",
                 "Install it from https://adoptium.net/, or set \"java_path\" in config.json, then try again.",
+            ],
+        )
+
+    # Checked here, not just at setup time: an outdated/wrong Java on PATH launches
+    # fine (find_java only checks it exists) but crashes the server instantly with a
+    # cryptic UnsupportedClassVersionError - catching the mismatch before launching
+    # gives a clear message instead of a doomed process and a confusing crash log.
+    detected = javacheck.detected_major_version(cfg["java_path"])
+    if detected is not None and detected != required:
+        return ActionResult(
+            False,
+            [
+                f"Installed Java is version {detected}, but Minecraft {cfg['mc_version']} needs Java "
+                f"{required} - starting would just crash immediately.",
+                f"Install Java {required} from https://adoptium.net/, or point \"java_path\" in "
+                "config.json at it, then try again.",
             ],
         )
 
