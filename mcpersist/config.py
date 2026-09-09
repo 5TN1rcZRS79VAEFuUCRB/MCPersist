@@ -11,6 +11,8 @@ DEFAULTS = {
     "loader": "vanilla",
     "mc_version": None,
     "java_path": "java",
+    "java_auto": True,
+    "required_java_major": None,
     "memory_auto": True,
     "memory_mb": None,
     "rcon_port": 25575,
@@ -33,6 +35,12 @@ def load():
     data = json.loads(CONFIG_PATH.read_text(encoding="utf-8-sig"))
     merged = dict(DEFAULTS)
     merged.update(data)
+    # Migration: a config saved before java_auto existed, with "java_path" already
+    # pointed at something specific, was a deliberate choice - don't silently start
+    # treating it as auto-managed (and potentially downloading/switching to a
+    # different Java under it) just because the new field defaults to True.
+    if "java_auto" not in data and data.get("java_path") not in (None, "java"):
+        merged["java_auto"] = False
     return merged
 
 

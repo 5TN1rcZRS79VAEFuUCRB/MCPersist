@@ -4,6 +4,8 @@
   "loader": "vanilla",
   "mc_version": null,
   "java_path": "java",
+  "java_auto": true,
+  "required_java_major": null,
   "memory_auto": true,
   "memory_mb": null,
   "rcon_port": 25575,

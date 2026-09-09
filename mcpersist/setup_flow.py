@@ -220,9 +220,16 @@ def finish_setup(instance_dir, world_name, mc_version, loader, owner_uuid, owner
                 "needed anyway."
             )
 
-    required_java = world.required_java_major(mc_version, instance_dir=instance_dir)
-    explicit_java = cfg.get("java_path") not in (None, "java")
-    if explicit_java:
+    # Mojang's own manifest is authoritative and current; the hardcoded table in
+    # world.py is a fallback guess for when that lookup isn't available (offline,
+    # very old versions) - it goes stale every time a new Minecraft version bumps its
+    # Java requirement, so prefer the live value whenever we can get one.
+    required_java = server_vanilla.required_java_major(mc_version) or world.required_java_major(
+        mc_version, instance_dir=instance_dir
+    )
+    cfg["required_java_major"] = required_java
+
+    if not cfg.get("java_auto", True):
         detected_java = javacheck.detected_major_version(cfg["java_path"])
         if detected_java is None:
             lines.append(f'WARNING: "java_path" ({cfg["java_path"]!r}) was not found or unreadable.')

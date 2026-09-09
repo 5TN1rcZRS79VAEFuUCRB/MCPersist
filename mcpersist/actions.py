@@ -3,7 +3,7 @@ so neither duplicates it."""
 
 from dataclasses import dataclass, field
 
-from . import config, java_manager, javacheck, process_manager, tunnel_relay, world
+from . import config, java_manager, javacheck, process_manager, server_vanilla, tunnel_relay, world
 
 
 @dataclass
@@ -18,14 +18,24 @@ def start_server(cfg, server_dir):
     if process_manager.is_running(process_manager.read_pid(server_pid_path)):
         return ActionResult(True, ["Server already running."])
 
-    required = world.required_java_major(cfg["mc_version"], instance_dir=cfg.get("instance_dir"))
-    # "java_path" defaults to the literal string "java" (meaning "figure it out") -
-    # only treat it as a deliberate override if it's been pointed at something else,
-    # and respect that choice exactly rather than second-guessing or downloading over
-    # it. Otherwise, auto-manage: reuse a matching install if one's already available,
-    # downloading a portable Temurin JRE only if nothing usable is found.
-    explicit_java = cfg.get("java_path") not in (None, "java")
-    if explicit_java:
+    # required_java_major is resolved (from Mojang's manifest, authoritative) and
+    # persisted at setup time. For a config from before that existed, try the same
+    # live lookup here (and cache it) rather than falling straight to world.py's
+    # hardcoded table, which goes stale every time a new Minecraft version bumps its
+    # Java requirement - falling back to it is a last resort, not the first guess.
+    required = cfg.get("required_java_major")
+    if required is None:
+        required = server_vanilla.required_java_major(cfg["mc_version"]) or world.required_java_major(
+            cfg["mc_version"], instance_dir=cfg.get("instance_dir")
+        )
+        cfg["required_java_major"] = required
+        config.save(cfg)
+    # java_auto (default True, same pattern as memory_auto): re-resolves a matching
+    # Java every start rather than trusting a path persisted from a past run, so a
+    # correction here (or in the required-version lookup) actually takes effect
+    # instead of being stuck on whatever was auto-downloaded once. Only a deliberate
+    # "java_auto": false override skips this and trusts "java_path" exactly as set.
+    if not cfg.get("java_auto", True):
         java_path = javacheck.find_java(cfg["java_path"])
         if not java_path:
             return ActionResult(False, [f'"java_path" in config.json ({cfg["java_path"]!r}) was not found.'])
