@@ -64,6 +64,16 @@ flagged with a warning - turn it on yourself as soon as possible: set
 `white-list=true` in `server.properties`, add players to `whitelist.json` (server
 stopped) or via `whitelist add`/`whitelist on` over RCON (server running).
 
+## Memory & performance
+
+RAM and view/simulation distance are auto-sized from your PC's specs by default (a
+background-persistent server shares the machine with whatever else you're doing, so
+this favors running smoothly alongside other things over maxing out the hardware) -
+visible and editable in the **Memory** and **Performance** sections of the status
+screen, each with an **Auto** toggle. Turn it off to set a value yourself; either way,
+changes take effect on the next Start/Restart, not retroactively on an already-running
+server (the status screen tells you which, once you hit Save).
+
 ## The tunnel
 
 Starting the server connects to the relay baked into `config.json`'s defaults with
@@ -171,8 +181,13 @@ To build the binary yourself:
 
 ```bash
 pip install pyinstaller
-pyinstaller --name MCPersist --onefile --windowed main_gui.py
+pyinstaller --name MCPersist --onedir --windowed --noupx main_gui.py
 ```
+
+(`--onedir`, not `--onefile` - a self-extracting single exe is exactly the pattern
+that gets flagged as a false positive by some antivirus engines; see the note above.
+The build lands in `dist/MCPersist/` - zip that folder up if you want to distribute
+it, same as the release builds do.)
 
 **Troubleshooting a locked-down/managed Windows machine**: if `python.org`'s installer
 fails with `0x80070003` from Windows Installer, or `pip install` fails building a
