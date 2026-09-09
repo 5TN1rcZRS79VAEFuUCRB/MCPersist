@@ -1,0 +1,4 @@
+requests
+nbtlib
+psutil
+PySide6

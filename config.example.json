@@ -1,0 +1,18 @@
+{
+  "instance_dir": null,
+  "world_name": null,
+  "loader": "vanilla",
+  "mc_version": null,
+  "java_path": "java",
+  "memory_auto": true,
+  "memory_mb": null,
+  "rcon_port": 25575,
+  "rcon_password": null,
+  "join_address": null,
+  "relay_host": "5.161.120.124",
+  "relay_control_port": 7000,
+  "relay_data_port": 7001,
+  "subdomain": null,
+  "relay_token": null,
+  "public_domain": "mcpersist.com"
+}

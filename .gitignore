@@ -1,0 +1,17 @@
+# Secrets and personal config - never commit these
+config.json
+relay/users.json
+relay/auto_assignments.json
+
+# Runtime data - world saves, downloaded server jars, logs
+servers/
+bin/
+
+# Python
+__pycache__/
+*.pyc
+
+# PyInstaller build output
+dist/
+build/
+*.spec

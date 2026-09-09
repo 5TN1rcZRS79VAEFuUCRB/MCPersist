@@ -1,0 +1,14 @@
+[Unit]
+Description=MCPersist relay
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/mcrelay
+ExecStart=/usr/bin/python3 /opt/mcrelay/relay_server.py
+Restart=always
+RestartSec=5
+User=mcrelay
+
+[Install]
+WantedBy=multi-user.target

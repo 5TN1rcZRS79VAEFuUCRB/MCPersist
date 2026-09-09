@@ -1,0 +1,29 @@
+name: Build Windows binary
+
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install pyinstaller
+
+      - name: Build MCPersist.exe
+        run: pyinstaller --name MCPersist --onefile --windowed --distpath dist --workpath build --specpath build main_gui.py
+
+      - name: Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/MCPersist.exe
