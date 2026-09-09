@@ -1,9 +1,8 @@
-# MCPersist relay (self-hosted, playit.gg replacement)
+# MCPersist relay (self-hosted)
 
 Runs on a small always-on Linux VPS you control. Lets multiple MCPersist users share
 one relay, each reachable at their own subdomain on the standard Minecraft port
-(`25565`) - no port typed by players, same as e4mc/playit.gg, but self-hosted on your
-own domain.
+(`25565`) - no port typed by players - fully self-hosted on your own domain.
 
 ## Getting a VPS
 

@@ -1,11 +1,10 @@
 # MCPersist
 
-A persistent alternative to [e4mc](https://github.com/e4mc/e4mc). e4mc tunnels your
-singleplayer world's built-in server, so the moment you close the game the address
-dies with it. MCPersist instead converts your world into a real standalone dedicated
-server process, running independently of the game client, and gives it a
-**persistent** join address (via a relay - see [`relay/`](relay/)) that stays the
-same across restarts.
+A tool for turning a singleplayer Minecraft world into a real standalone dedicated
+server, running independently of the game client, with a **persistent** join address
+(via a relay - see [`relay/`](relay/)) that stays the same across restarts. Inspired
+by [e4mc](https://github.com/e4mc/e4mc), whose tunneled address is tied to the game
+client's own session and resets whenever you close it.
 
 The server keeps running after you close Minecraft. With autostart enabled, it also
 comes back automatically after a reboot (as long as your PC is on).
@@ -52,9 +51,9 @@ stopped) or via `whitelist add`/`whitelist on` over RCON (server running).
 ## The tunnel
 
 Starting the server connects to the relay baked into `config.json`'s defaults with
-**no setup required** - it registers automatically and gets back a random, e4mc-style
-address (e.g. `quiet-badger.mcpersist.com`). That address is ephemeral: it can change
-on the next start, same as e4mc.
+**no setup required** - it registers automatically and gets back a random address
+(e.g. `quiet-badger.mcpersist.com`). That address is ephemeral: it can change on the
+next start.
 
 For a **fixed, memorable address that never changes** - the actual point of this
 project for anyone who cares about persistence - get a subdomain + token from
