@@ -139,12 +139,19 @@ def finish_setup(instance_dir, world_name, mc_version, loader, owner_uuid, owner
     else:
         _, loader_version, installer_version = server_fabric.download_server_jar(mc_version, jar_path)
         lines.append(f"Fabric loader {loader_version}, installer {installer_version}")
-        mods = server_fabric.copy_mods(instance_dir, server_dir)
+        mods, skipped_mods = server_fabric.copy_mods(instance_dir, server_dir)
         if mods:
             lines.append(f"Copied {len(mods)} mod(s) into the server's mods/ folder.")
             lines.append(
                 "WARNING: client-only mods (rendering/HUD/etc.) can crash a dedicated server - "
                 "if startup fails, remove them from the mods/ folder and try again."
+            )
+        if skipped_mods:
+            lines.append(
+                f"Skipped {len(skipped_mods)} mod(s) known to be incompatible with a dedicated "
+                f"server (not copied): {', '.join(skipped_mods)}. e4mc specifically crashes the "
+                "server the moment a player joins - MCPersist replaces what it does, so it's not "
+                "needed anyway."
             )
 
     cfg.update(

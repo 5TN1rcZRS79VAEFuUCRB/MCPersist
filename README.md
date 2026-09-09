@@ -87,10 +87,11 @@ your own on a VPS you control. Point any MCPersist client at it with
   `servers/<world>/mods/`.
 - Java isn't auto-installed; setup/start tell you which version you need and where to
   get it.
-- If your Fabric modpack already bundles e4mc, you'll briefly see its own
-  (non-persistent, resets every restart) `*.e4mc.link` address in `server.out.log` at
-  boot - harmless to leave as a fallback, but the whole point of this tool is the
-  relay address instead, which (in reserved mode) doesn't change.
+- If your Fabric modpack already bundles e4mc (likely, if you're switching to
+  MCPersist from it), setup automatically skips copying it into the server's `mods/`
+  folder - e4mc is built against different Minecraft mappings server-side and crashes
+  the whole server the moment a player joins if left in. You don't need it anyway;
+  MCPersist replaces what it does.
 - The default relay is open to anyone running this tool (auto-registration, no token
   needed) - the only abuse control is a per-IP connection cap. No bandwidth limits or
   TLS on the control/data channels yet. Fine at small scale; revisit if a given relay

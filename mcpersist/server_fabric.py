@@ -39,12 +39,28 @@ def download_server_jar(mc_version, dest_path, loader_version=None, installer_ve
     return dest_path, loader_version, installer_version
 
 
+# Mods known to be incompatible with running as a dedicated server, excluded rather
+# than copied. e4mc specifically crashes the whole server tick loop the moment any
+# player finishes joining (NoSuchMethodError in its command registration - it's built
+# against different Minecraft mappings than what ships server-side), and anyone coming
+# to MCPersist from e4mc is very likely to still have it in their client mods folder.
+EXCLUDED_MOD_NAME_PARTS = ("e4mc",)
+
+
 def copy_mods(instance_dir, server_dir):
     src = Path(instance_dir) / "mods"
     if not src.exists():
-        return []
+        return [], []
     dest = Path(server_dir) / "mods"
     if dest.exists():
         shutil.rmtree(dest)
-    shutil.copytree(src, dest)
-    return sorted(p.name for p in dest.glob("*.jar"))
+    dest.mkdir(parents=True)
+
+    copied, skipped = [], []
+    for jar in sorted(src.glob("*.jar")):
+        if any(part in jar.name.lower() for part in EXCLUDED_MOD_NAME_PARTS):
+            skipped.append(jar.name)
+            continue
+        shutil.copy2(jar, dest / jar.name)
+        copied.append(jar.name)
+    return copied, skipped
