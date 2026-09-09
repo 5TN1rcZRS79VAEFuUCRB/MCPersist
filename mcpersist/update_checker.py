@@ -76,20 +76,94 @@ def _validate_zip_entries(zf, dest_dir):
 # (the previous approach) meant a single quote anywhere in the install path or a
 # Windows username - "C:\Users\O'Brien\..." is a completely ordinary path - would
 # break the quoting and could turn into something other than the intended command.
+#
+# Logs every step to $LogPath and retries the extract: a process disappearing from
+# Get-Process doesn't guarantee every handle on its own files (especially the DLLs in
+# _internal/) is released the same instant, and antivirus real-time scanning can also
+# briefly hold a lock on a just-written exe - both look like a transient "file in use"
+# failure from Expand-Archive. The original version had no error handling at all, so a
+# failure here just silently killed the script before it ever reached Start-Process:
+# the app would quit (having already handed off to this script) and nothing would come
+# back, with zero record of what went wrong. On failure the log and zip are left in
+# place (for diagnosis) instead of deleted, and the app checks for a leftover log on
+# next launch to surface the failure instead of leaving the user with no feedback at all.
 _UPDATER_PS1 = """param(
     [int]$ProcPid,
     [string]$ZipPath,
     [string]$DestDir,
-    [string]$ExePath
+    [string]$ExePath,
+    [string]$LogPath
 )
-while (Get-Process -Id $ProcPid -ErrorAction SilentlyContinue) {
-    Start-Sleep -Seconds 1
+
+function Log([string]$msg) {
+    $line = "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') $msg"
+    Add-Content -LiteralPath $LogPath -Value $line -ErrorAction SilentlyContinue
 }
-Expand-Archive -LiteralPath $ZipPath -DestinationPath $DestDir -Force
-Start-Process -FilePath $ExePath
-Remove-Item -LiteralPath $ZipPath -Force -ErrorAction SilentlyContinue
-Remove-Item -LiteralPath $PSCommandPath -Force -ErrorAction SilentlyContinue
+
+try {
+    Log "Updater started for pid $ProcPid"
+    while (Get-Process -Id $ProcPid -ErrorAction SilentlyContinue) {
+        Start-Sleep -Seconds 1
+    }
+
+    # Grace period after the process disappears, before touching its files.
+    Start-Sleep -Seconds 2
+
+    Log "Extracting $ZipPath to $DestDir"
+    $extracted = $false
+    for ($i = 1; $i -le 10; $i++) {
+        try {
+            Expand-Archive -LiteralPath $ZipPath -DestinationPath $DestDir -Force -ErrorAction Stop
+            $extracted = $true
+            break
+        } catch {
+            Log "Extract attempt $i/10 failed: $($_.Exception.Message)"
+            Start-Sleep -Seconds 2
+        }
+    }
+
+    if (-not $extracted) {
+        Log "FAILED: could not extract update after 10 attempts - old install left in place"
+        exit 1
+    }
+
+    if (-not (Test-Path -LiteralPath $ExePath)) {
+        Log "FAILED: $ExePath not found after extraction"
+        exit 1
+    }
+
+    Log "Extraction OK, relaunching $ExePath"
+    Start-Process -FilePath $ExePath
+    Log "Update complete"
+    Remove-Item -LiteralPath $ZipPath -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $LogPath -Force -ErrorAction SilentlyContinue
+} catch {
+    Log "FAILED: unexpected error: $($_.Exception.Message)"
+    exit 1
+} finally {
+    Remove-Item -LiteralPath $PSCommandPath -Force -ErrorAction SilentlyContinue
+}
 """
+
+
+def update_log_path():
+    return Path(tempfile.gettempdir()) / "mcpersist_update.log"
+
+
+def check_last_update_failure():
+    """If the last self-update attempt left a failure log behind (see _UPDATER_PS1),
+    returns its text and deletes it so it's only ever surfaced once. Returns None if
+    the last attempt succeeded (the script deletes its own log on success) or no
+    update was ever attempted."""
+    log_path = update_log_path()
+    if not log_path.exists():
+        return None
+    try:
+        text = log_path.read_text(encoding="utf-8", errors="replace").strip()
+    except OSError:
+        return None
+    log_path.unlink(missing_ok=True)
+    return text or None
 
 
 def apply_update(download_url):
@@ -106,6 +180,9 @@ def apply_update(download_url):
 
     tmp_dir = Path(tempfile.gettempdir())
     zip_path = tmp_dir / "mcpersist_update.zip"
+    log_path = update_log_path()
+    log_path.unlink(missing_ok=True)  # clear any already-surfaced leftover from a prior attempt
+
     resp = requests.get(download_url, stream=True, timeout=120)
     resp.raise_for_status()
     with open(zip_path, "wb") as f:
@@ -135,6 +212,8 @@ def apply_update(download_url):
             str(BASE_DIR),
             "-ExePath",
             exe_path,
+            "-LogPath",
+            str(log_path),
         ],
         creationflags=subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS,
         close_fds=True,

@@ -54,6 +54,13 @@ class StatusPage(QWidget):
         self.update_box.setVisible(False)
         layout.addWidget(self.update_box)
         self._pending_update = None
+        # A leftover log here means the updater helper script ran last time and
+        # failed partway through (see update_checker._UPDATER_PS1) - the app would
+        # have just closed with no explanation, since the failure happened in a
+        # detached process after this one already quit. Check once, up front, so
+        # that gets surfaced instead of the user just seeing "update available"
+        # again with no idea anything went wrong last time.
+        self._last_update_failure = update_checker.check_last_update_failure()
 
         # ----- Status group -----
         status_box = QGroupBox()
@@ -215,10 +222,22 @@ class StatusPage(QWidget):
         self._update_worker.start()
 
     def _on_update_check_done(self, result):
+        self._pending_update = result
+        if self._last_update_failure:
+            self.update_box.setVisible(True)
+            self.update_label.setStyleSheet("color: #e74c3c; font-weight: bold;")
+            self.update_label.setText(
+                "The last update attempt failed partway through and MCPersist had to be "
+                "reopened manually - it's safe to try again."
+            )
+            self.update_btn.setText("Try Again")
+            self.update_btn.setEnabled(bool(result))
+            return
         if not result:
             return
-        self._pending_update = result
+        self.update_label.setStyleSheet("color: #2ecc71; font-weight: bold;")
         self.update_label.setText(f"MCPersist {result['version']} is available.")
+        self.update_btn.setText("Update Now")
         self.update_box.setVisible(True)
 
     @staticmethod
