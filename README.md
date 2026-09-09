@@ -13,12 +13,19 @@ comes back automatically after a reboot (as long as your PC is on).
 
 1. Install [Java](https://adoptium.net/) if you don't have it (which version depends
    on your Minecraft version - MCPersist checks and tells you if it's wrong).
-2. Download `MCPersist.exe` from [Releases](../../releases).
-3. Run it. Click **Set Up New World**, pick your Minecraft instance folder and world,
-   and follow the wizard.
+2. Download `MCPersist-windows.zip` from [Releases](../../releases) and extract it.
+3. Run `MCPersist.exe` inside the extracted folder. Click **Set Up New World**, pick
+   your Minecraft instance folder and world, and follow the wizard.
 4. Click **Start**. The join address shown is what you give your friends.
 
-No Python install needed for this path - everything's bundled into the `.exe`.
+No Python install needed for this path - everything's bundled into the folder.
+
+**A note on antivirus/SmartScreen warnings**: MCPersist isn't code-signed (that costs
+money and this is a free hobby project), so some antivirus engines and Windows
+SmartScreen may flag or warn about the binary the first time - this is extremely
+common for small, unsigned open-source tools and not evidence of anything malicious.
+The source is fully here in this repo if you'd rather verify or build it yourself; see
+[Building from source](#building-from-source).
 
 ## Whitelist & adding friends
 

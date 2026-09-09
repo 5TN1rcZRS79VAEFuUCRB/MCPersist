@@ -24,9 +24,12 @@ jobs:
           pip install pyinstaller
 
       - name: Build MCPersist.exe
-        run: pyinstaller --name MCPersist --onefile --windowed --distpath dist --workpath build --specpath build main_gui.py
+        run: pyinstaller --name MCPersist --onedir --windowed --noupx --distpath dist --workpath build --specpath build main_gui.py
+
+      - name: Zip build output
+        run: Compress-Archive -Path dist/MCPersist/* -DestinationPath dist/MCPersist-windows.zip
 
       - name: Release
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/MCPersist.exe
+          files: dist/MCPersist-windows.zip
