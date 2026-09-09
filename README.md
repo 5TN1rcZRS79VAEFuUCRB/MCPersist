@@ -11,14 +11,13 @@ comes back automatically after a reboot (as long as your PC is on).
 
 ## Quickstart
 
-1. Install [Java](https://adoptium.net/) if you don't have it (which version depends
-   on your Minecraft version - MCPersist checks and tells you if it's wrong).
-2. Download `MCPersist-windows.zip` from [Releases](../../releases) and extract it.
-3. Run `MCPersist.exe` inside the extracted folder. Click **Set Up New World**, pick
+1. Download `MCPersist-windows.zip` from [Releases](../../releases) and extract it.
+2. Run `MCPersist.exe` inside the extracted folder. Click **Set Up New World**, pick
    your Minecraft instance folder, then either select one of your existing
    singleplayer worlds to promote or generate a brand-new one from scratch, and
-   follow the wizard.
-4. Click **Start**. The join address shown is what you give your friends.
+   follow the wizard - the right Java version downloads automatically if you don't
+   already have it, no separate install needed.
+3. Click **Start**. The join address shown is what you give your friends.
 
 No Python install needed for this path - everything's bundled into the folder.
 
@@ -87,8 +86,10 @@ your own on a VPS you control. Point any MCPersist client at it with
   mods (rendering, HUD, etc.) can crash a dedicated server - if startup fails, check
   `servers/<world>/logs/server.out.log` and remove the offending mod(s) from
   `servers/<world>/mods/`.
-- Java isn't auto-installed; setup/start tell you which version you need and where to
-  get it.
+- Java is handled automatically: if `java_path` in `config.json` is still the default,
+  setup/start download a matching portable Temurin JRE into `bin/` themselves (like
+  Prism/MultiMC do) rather than requiring a system-wide install. Set `java_path`
+  explicitly if you'd rather point at your own Java install instead.
 - If your Fabric modpack already bundles e4mc (likely, if you're switching to
   MCPersist from it), setup automatically skips copying it into the server's `mods/`
   folder - e4mc is built against different Minecraft mappings server-side and crashes
@@ -113,6 +114,7 @@ mcpersist/
   world.py               reads world saves: version/loader/owner detection
   server_vanilla.py     downloads a matching vanilla server jar
   server_fabric.py       downloads a matching Fabric server jar + mods
+  java_manager.py         auto-downloads a matching portable Java (Temurin) if needed
   mojang.py               UUID -> username lookups (for whitelist/op)
   tunnel_relay.py        launches the tunnel client as a detached process
   tunnel_relay_run.py     the tunnel client itself - talks to the relay

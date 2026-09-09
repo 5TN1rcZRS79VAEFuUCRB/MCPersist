@@ -3,7 +3,7 @@ so neither duplicates it."""
 
 from dataclasses import dataclass, field
 
-from . import config, javacheck, process_manager, tunnel_relay, world
+from . import config, java_manager, javacheck, process_manager, tunnel_relay, world
 
 
 @dataclass
@@ -18,32 +18,44 @@ def start_server(cfg, server_dir):
     if process_manager.is_running(process_manager.read_pid(server_pid_path)):
         return ActionResult(True, ["Server already running."])
 
-    java_path = javacheck.find_java(cfg["java_path"])
     required = world.required_java_major(cfg["mc_version"], instance_dir=cfg.get("instance_dir"))
-    if not java_path:
-        return ActionResult(
-            False,
-            [
-                f"Java not found on PATH (Minecraft {cfg['mc_version']} needs Java {required}).",
-                "Install it from https://adoptium.net/, or set \"java_path\" in config.json, then try again.",
-            ],
-        )
-
-    # Checked here, not just at setup time: an outdated/wrong Java on PATH launches
-    # fine (find_java only checks it exists) but crashes the server instantly with a
-    # cryptic UnsupportedClassVersionError - catching the mismatch before launching
-    # gives a clear message instead of a doomed process and a confusing crash log.
-    detected = javacheck.detected_major_version(cfg["java_path"])
-    if detected is not None and detected != required:
-        return ActionResult(
-            False,
-            [
-                f"Installed Java is version {detected}, but Minecraft {cfg['mc_version']} needs Java "
-                f"{required} - starting would just crash immediately.",
-                f"Install Java {required} from https://adoptium.net/, or point \"java_path\" in "
-                "config.json at it, then try again.",
-            ],
-        )
+    # "java_path" defaults to the literal string "java" (meaning "figure it out") -
+    # only treat it as a deliberate override if it's been pointed at something else,
+    # and respect that choice exactly rather than second-guessing or downloading over
+    # it. Otherwise, auto-manage: reuse a matching install if one's already available,
+    # downloading a portable Temurin JRE only if nothing usable is found.
+    explicit_java = cfg.get("java_path") not in (None, "java")
+    if explicit_java:
+        java_path = javacheck.find_java(cfg["java_path"])
+        if not java_path:
+            return ActionResult(False, [f'"java_path" in config.json ({cfg["java_path"]!r}) was not found.'])
+        # Checked here, not just at setup time: an outdated/wrong Java launches fine
+        # (find_java only checks it exists) but crashes the server instantly with a
+        # cryptic UnsupportedClassVersionError - catching the mismatch before
+        # launching gives a clear message instead of a doomed process.
+        detected = javacheck.detected_major_version(cfg["java_path"])
+        if detected is not None and detected != required:
+            return ActionResult(
+                False,
+                [
+                    f"Installed Java is version {detected}, but Minecraft {cfg['mc_version']} needs Java "
+                    f"{required} - starting would just crash immediately.",
+                    f"Install Java {required} from https://adoptium.net/, or point \"java_path\" in "
+                    "config.json at it, then try again.",
+                ],
+            )
+    else:
+        try:
+            java_path = java_manager.ensure_java(required)
+        except Exception as e:
+            return ActionResult(
+                False,
+                [
+                    f"Couldn't get a working Java {required} automatically: {e}",
+                    "Install it yourself from https://adoptium.net/, or set \"java_path\" in config.json, "
+                    "then try again.",
+                ],
+            )
 
     jar_path = server_dir / "server.jar"
     if not jar_path.exists():

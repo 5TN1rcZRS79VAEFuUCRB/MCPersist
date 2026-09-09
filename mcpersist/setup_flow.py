@@ -5,7 +5,7 @@ the GUI so neither duplicates it."""
 import json
 from pathlib import Path
 
-from . import config, javacheck, mojang, server_fabric, server_vanilla, world
+from . import config, java_manager, javacheck, mojang, server_fabric, server_vanilla, world
 from .actions import ActionResult
 from .paths import SERVERS_DIR
 
@@ -220,6 +220,30 @@ def finish_setup(instance_dir, world_name, mc_version, loader, owner_uuid, owner
                 "needed anyway."
             )
 
+    required_java = world.required_java_major(mc_version, instance_dir=instance_dir)
+    explicit_java = cfg.get("java_path") not in (None, "java")
+    if explicit_java:
+        detected_java = javacheck.detected_major_version(cfg["java_path"])
+        if detected_java is None:
+            lines.append(f'WARNING: "java_path" ({cfg["java_path"]!r}) was not found or unreadable.')
+        elif detected_java != required_java:
+            lines.append(
+                f'WARNING: "java_path" is Java {detected_java}, but Minecraft {mc_version} needs Java '
+                f"{required_java}."
+            )
+        else:
+            lines.append(f"Java {detected_java} detected - matches what Minecraft {mc_version} needs.")
+    else:
+        lines.append(f"Getting Java {required_java} ...")
+        try:
+            cfg["java_path"] = java_manager.ensure_java(required_java)
+            lines.append(f"Using Java {required_java}.")
+        except Exception as e:
+            lines.append(
+                f"WARNING: couldn't get Java {required_java} automatically ({e}). Install it yourself "
+                'from https://adoptium.net/, or set "java_path" in config.json.'
+            )
+
     cfg.update(
         {
             "instance_dir": instance_dir,
@@ -232,17 +256,6 @@ def finish_setup(instance_dir, world_name, mc_version, loader, owner_uuid, owner
     write_eula(server_dir)
     write_server_properties(server_dir, cfg, enable_whitelist=bool(owner_uuid and owner_name))
     config.save(cfg)
-
-    required_java = world.required_java_major(mc_version, instance_dir=instance_dir)
-    detected_java = javacheck.detected_major_version(cfg["java_path"])
-    if detected_java is None:
-        lines.append(f"WARNING: couldn't find Java on PATH. Minecraft {mc_version} needs Java {required_java}.")
-    elif detected_java != required_java:
-        lines.append(
-            f"WARNING: detected Java {detected_java}, but Minecraft {mc_version} needs Java {required_java}."
-        )
-    else:
-        lines.append(f"Java {detected_java} detected - matches what Minecraft {mc_version} needs.")
 
     lines.append("Setup complete.")
     return ActionResult(True, lines)
