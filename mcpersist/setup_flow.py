@@ -19,7 +19,11 @@ def list_worlds(instance_dir):
         return ActionResult(False, [f"Instance folder not found: {instance_dir!r}"])
     saves = world.list_saves(instance_dir)
     if not saves:
-        return ActionResult(False, [f"No worlds with a level.dat found under {instance_dir}\\saves"])
+        # Not an error - an instance with no worlds yet is exactly when someone wants
+        # to generate a brand-new one instead of picking an existing save.
+        return ActionResult(
+            True, [f"No existing worlds found under {instance_dir}\\saves."], data={"worlds": []}
+        )
     return ActionResult(True, [], data={"worlds": [p.name for p in saves]})
 
 
@@ -29,6 +33,24 @@ def detect_world_info(instance_dir, world_name):
         "mc_version": world.read_mc_version(save_path),
         "suggested_loader": world.detect_loader(instance_dir),
     }
+
+
+def detect_new_world_info(instance_dir):
+    """Same shape as detect_world_info, but for a world that doesn't exist yet -
+    there's no level.dat to read a version from, so it's a best-effort guess from the
+    launcher's own instance metadata (still editable by the user either way)."""
+    return {
+        "mc_version": world.read_prism_intended_version(instance_dir),
+        "suggested_loader": world.detect_loader(instance_dir),
+    }
+
+
+def valid_new_world_name(world_name):
+    if not world_name or not world_name.strip():
+        return False
+    # It becomes a directory name directly under servers/ - keep it a plain name, not
+    # a path (no separators, no "..").
+    return world_name not in (".", "..") and not any(c in world_name for c in "\\/:*?\"<>|")
 
 
 def write_eula(server_dir):
@@ -61,6 +83,37 @@ def write_ops(server_dir, uuid, name):
     (Path(server_dir) / "ops.json").write_text(json.dumps(entry, indent=2), encoding="utf-8")
 
 
+def _whitelist_result_lines(whitelisted, owner_name, not_whitelisted_reason):
+    lines = []
+    if whitelisted:
+        lines.append(
+            f"Whitelisted {owner_name!r}. Whitelist is ON - only whitelisted players can join."
+        )
+        lines.append(
+            "To add a friend: have the server running, then either run "
+            "`whitelist add <their Minecraft username>` via RCON/the server console, or have an "
+            "op (like you) run `/whitelist add <username>` in-game. Exact username, case-sensitive."
+        )
+        lines.append(
+            "DISCLAIMER: leave the whitelist ON. Your server is reachable at a public address - "
+            "port-scanning bots and random players routinely probe open Minecraft servers on the "
+            "internet, and with online-mode on but no whitelist, any real Minecraft account could "
+            "join and grief the world. Turning it off, even temporarily, is a real risk, not a "
+            "hypothetical one."
+        )
+    else:
+        lines.append(f"{not_whitelisted_reason} - leaving the whitelist OFF for now.")
+        lines.append(
+            "DISCLAIMER: with the whitelist off, ANYONE with a Minecraft account can join once the "
+            "tunnel is up - your server is reachable at a public address, and port-scanning bots and "
+            "random players do find and probe open servers on the internet. Turn it on as soon as "
+            "possible: set white-list=true in server.properties and add players to whitelist.json "
+            "(or run `whitelist add <username>` / `whitelist on` via RCON/in-game once you're an op), "
+            "then restart."
+        )
+    return lines
+
+
 def prepare_world(instance_dir, world_name):
     """Copies the world save and detects/whitelists the owner. Split from
     finish_setup so callers can show the detected owner (and ask about cheats) before
@@ -83,36 +136,49 @@ def prepare_world(instance_dir, world_name):
     whitelisted = bool(owner_uuid and owner_name)
     if whitelisted:
         write_whitelist(server_dir, owner_uuid, owner_name)
-        lines.append(
-            f"Whitelisted {owner_name!r} (world owner, detected automatically). Whitelist is ON - "
-            "only whitelisted players can join."
-        )
-        lines.append(
-            "To add a friend: have the server running, then either run "
-            "`whitelist add <their Minecraft username>` via RCON/the server console, or have an "
-            "op (like you) run `/whitelist add <username>` in-game. Exact username, case-sensitive."
-        )
-        lines.append(
-            "DISCLAIMER: leave the whitelist ON. Your server is reachable at a public address - "
-            "port-scanning bots and random players routinely probe open Minecraft servers on the "
-            "internet, and with online-mode on but no whitelist, any real Minecraft account could "
-            "join and grief the world. Turning it off, even temporarily, is a real risk, not a "
-            "hypothetical one."
-        )
+        not_whitelisted_reason = None
     else:
         found = "no players" if not owner_uuid else "more than one player"
-        lines.append(
-            f"Couldn't automatically identify the world owner ({found} found in this world's saved "
-            "data) - leaving the whitelist OFF for now."
+        not_whitelisted_reason = (
+            f"Couldn't automatically identify the world owner ({found} found in this world's "
+            "saved data)"
         )
-        lines.append(
-            "DISCLAIMER: with the whitelist off, ANYONE with a Minecraft account can join once the "
-            "tunnel is up - your server is reachable at a public address, and port-scanning bots and "
-            "random players do find and probe open servers on the internet. Turn it on as soon as "
-            "possible: set white-list=true in server.properties and add players to whitelist.json "
-            "(or run `whitelist add <username>` / `whitelist on` via RCON/in-game once you're an op), "
-            "then restart."
-        )
+    lines.extend(_whitelist_result_lines(whitelisted, owner_name, not_whitelisted_reason))
+
+    return ActionResult(
+        True,
+        lines,
+        data={"owner_uuid": owner_uuid, "owner_name": owner_name, "whitelisted": whitelisted},
+    )
+
+
+def prepare_new_world(instance_dir, world_name, owner_username):
+    """Sets up a server directory for a brand-new world - there's no existing save to
+    copy, the Minecraft server generates it itself on first start. The owner can't be
+    auto-detected from player data that doesn't exist yet, so it's resolved from a
+    typed-in username instead."""
+    server_dir = SERVERS_DIR / world_name
+    if server_dir.exists() and any(server_dir.iterdir()):
+        return ActionResult(False, [f"{server_dir} already exists - pick a different world name."])
+    server_dir.mkdir(parents=True, exist_ok=True)
+    (server_dir / "logs").mkdir(exist_ok=True)
+
+    lines = [f"Creating a new world {world_name!r} - it will be generated on first start."]
+
+    owner_uuid = owner_name = None
+    whitelisted = False
+    if owner_username:
+        resolved = mojang.uuid_for_username(owner_username)
+        if resolved:
+            owner_uuid, owner_name = resolved
+            write_whitelist(server_dir, owner_uuid, owner_name)
+            whitelisted = True
+            not_whitelisted_reason = None
+        else:
+            not_whitelisted_reason = f"Couldn't find a Minecraft account named {owner_username!r}"
+    else:
+        not_whitelisted_reason = "No owner username given"
+    lines.extend(_whitelist_result_lines(whitelisted, owner_name, not_whitelisted_reason))
 
     return ActionResult(
         True,

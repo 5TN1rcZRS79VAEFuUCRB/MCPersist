@@ -29,6 +29,17 @@ def prompt_choice(msg, options):
         print("Please enter a valid number.")
 
 
+def _prompt_loader(suggested_loader):
+    if suggested_loader in ("forge", "neoforge"):
+        print(
+            f"WARNING: detected {suggested_loader.title()}, which isn't supported yet - "
+            "only Vanilla and Fabric servers can be set up right now. Pick one below, but the "
+            "world may not run correctly without its actual mod loader."
+        )
+    loader_idx = prompt_choice(f"Server type (detected: {suggested_loader})", ["vanilla", "fabric"])
+    return ["vanilla", "fabric"][loader_idx]
+
+
 def cmd_setup(args):
     instance_dir = args.instance_dir or setup_flow.default_instance_dir()
     instance_dir = prompt("Minecraft instance folder", instance_dir)
@@ -40,29 +51,43 @@ def cmd_setup(args):
         return 1
     worlds = worlds_result.data["worlds"]
 
-    idx = prompt_choice("Pick a world to make persistent", worlds)
-    world_name = worlds[idx]
+    generate_new = True
+    if worlds:
+        mode_idx = prompt_choice("What do you want to do?", ["Select an existing world", "Generate a new world"])
+        generate_new = mode_idx == 1
 
-    info = setup_flow.detect_world_info(instance_dir, world_name)
-    mc_version = info["mc_version"]
-    if not mc_version:
-        mc_version = prompt("Couldn't auto-detect the Minecraft version, please enter it (e.g. 1.20.4)")
+    if generate_new:
+        world_name = prompt("Name for the new world")
+        while not setup_flow.valid_new_world_name(world_name):
+            world_name = prompt('Please enter a valid name (no \\ / : * ? " < > |)')
+
+        info = setup_flow.detect_new_world_info(instance_dir)
+        mc_version = prompt("Minecraft version to generate (e.g. 1.20.4)", info["mc_version"])
+        loader = _prompt_loader(info["suggested_loader"])
+        owner_username = prompt("Your Minecraft username (for whitelist/op) - leave blank to skip")
+
+        print()
+        prepare_result = setup_flow.prepare_new_world(instance_dir, world_name, owner_username)
+        for line in prepare_result.lines:
+            print(line)
+        if not prepare_result.ok:
+            return 1
     else:
-        print(f"Detected Minecraft version: {mc_version}")
+        idx = prompt_choice("Pick a world to make persistent", worlds)
+        world_name = worlds[idx]
 
-    if info["suggested_loader"] in ("forge", "neoforge"):
-        print(
-            f"WARNING: detected {info['suggested_loader'].title()}, which isn't supported yet - "
-            "only Vanilla and Fabric servers can be set up right now. Pick one below, but the "
-            "world may not run correctly without its actual mod loader."
-        )
-    loader_idx = prompt_choice(f"Server type (detected: {info['suggested_loader']})", ["vanilla", "fabric"])
-    loader = ["vanilla", "fabric"][loader_idx]
+        info = setup_flow.detect_world_info(instance_dir, world_name)
+        mc_version = info["mc_version"]
+        if not mc_version:
+            mc_version = prompt("Couldn't auto-detect the Minecraft version, please enter it (e.g. 1.20.4)")
+        else:
+            print(f"Detected Minecraft version: {mc_version}")
+        loader = _prompt_loader(info["suggested_loader"])
 
-    print()
-    prepare_result = setup_flow.prepare_world(instance_dir, world_name)
-    for line in prepare_result.lines:
-        print(line)
+        print()
+        prepare_result = setup_flow.prepare_world(instance_dir, world_name)
+        for line in prepare_result.lines:
+            print(line)
 
     owner_uuid = prepare_result.data.get("owner_uuid")
     owner_name = prepare_result.data.get("owner_name")

@@ -5,6 +5,7 @@ import subprocess
 
 from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtWidgets import (
+    QButtonGroup,
     QCheckBox,
     QComboBox,
     QFileDialog,
@@ -338,10 +339,40 @@ class SetupPage(QWidget):
         # Step 2
         self.step2_box = QGroupBox("2. Choose world")
         step2_layout = QVBoxLayout(self.step2_box)
-        step2_layout.addWidget(QLabel("World"))
+
+        mode_row = QHBoxLayout()
+        self.mode_existing_radio = QRadioButton("Select Existing World")
+        self.mode_new_radio = QRadioButton("Generate New World")
+        self.mode_existing_radio.setChecked(True)
+        self.mode_group = QButtonGroup(self)
+        self.mode_group.addButton(self.mode_existing_radio)
+        self.mode_group.addButton(self.mode_new_radio)
+        self.mode_existing_radio.toggled.connect(self.on_mode_changed)
+        mode_row.addWidget(self.mode_existing_radio)
+        mode_row.addWidget(self.mode_new_radio)
+        step2_layout.addLayout(mode_row)
+
+        self.existing_world_box = QWidget()
+        existing_layout = QVBoxLayout(self.existing_world_box)
+        existing_layout.setContentsMargins(0, 0, 0, 0)
+        existing_layout.addWidget(QLabel("World"))
         self.world_combo = QComboBox()
         self.world_combo.currentTextChanged.connect(self.on_world_selected)
-        step2_layout.addWidget(self.world_combo)
+        existing_layout.addWidget(self.world_combo)
+        step2_layout.addWidget(self.existing_world_box)
+
+        self.new_world_box = QWidget()
+        new_layout = QVBoxLayout(self.new_world_box)
+        new_layout.setContentsMargins(0, 0, 0, 0)
+        new_layout.addWidget(QLabel("New world name"))
+        self.new_world_name_edit = QLineEdit()
+        new_layout.addWidget(self.new_world_name_edit)
+        new_layout.addWidget(QLabel("Your Minecraft username (for whitelist/op - leave blank to skip)"))
+        self.owner_username_edit = QLineEdit()
+        new_layout.addWidget(self.owner_username_edit)
+        step2_layout.addWidget(self.new_world_box)
+        self.new_world_box.setVisible(False)
+
         step2_layout.addWidget(QLabel("Minecraft version"))
         self.mc_version_edit = QLineEdit()
         step2_layout.addWidget(self.mc_version_edit)
@@ -398,6 +429,8 @@ class SetupPage(QWidget):
     def reset(self):
         self.instance_dir_edit.setText(setup_flow.default_instance_dir())
         self.step1_msg.setText("")
+        self.new_world_name_edit.setText("")
+        self.owner_username_edit.setText("")
         self.step1_box.setVisible(True)
         self.step2_box.setVisible(False)
         self.step3_box.setVisible(False)
@@ -415,17 +448,30 @@ class SetupPage(QWidget):
         if not result.ok:
             self.step1_msg.setText("\n".join(result.lines))
             return
-        self.step1_msg.setText("")
+        self.step1_msg.setText("\n".join(result.lines))
         self.instance_dir = instance_dir
         self.world_combo.clear()
-        self.world_combo.addItems(result.data["worlds"])
+        worlds = result.data["worlds"]
+        self.world_combo.addItems(worlds)
+        # No existing worlds to pick from - generating a new one is the only option.
+        self.mode_new_radio.setChecked(not worlds)
+        self.mode_existing_radio.setChecked(bool(worlds))
+        self.mode_existing_radio.setEnabled(bool(worlds))
+        self.on_mode_changed()
         self.step1_box.setVisible(False)
         self.step2_box.setVisible(True)
 
-    def on_world_selected(self, world_name):
-        if not world_name:
-            return
-        info = setup_flow.detect_world_info(self.instance_dir, world_name)
+    def on_mode_changed(self):
+        is_existing = self.mode_existing_radio.isChecked()
+        self.existing_world_box.setVisible(is_existing)
+        self.new_world_box.setVisible(not is_existing)
+        if is_existing:
+            self.on_world_selected(self.world_combo.currentText())
+        elif self.instance_dir:
+            info = setup_flow.detect_new_world_info(self.instance_dir)
+            self._apply_detected_loader(info)
+
+    def _apply_detected_loader(self, info):
         suggested = info["suggested_loader"]
         self.mc_version_edit.setText(info["mc_version"] or "")
         self.vanilla_radio.setChecked(suggested == "vanilla")
@@ -439,17 +485,36 @@ class SetupPage(QWidget):
         else:
             self.loader_warning.setText("")
 
+    def on_world_selected(self, world_name):
+        if not world_name:
+            return
+        info = setup_flow.detect_world_info(self.instance_dir, world_name)
+        self._apply_detected_loader(info)
+
     def on_prepare_world(self):
-        self.world_name = self.world_combo.currentText()
         self.mc_version = self.mc_version_edit.text()
         self.loader = "fabric" if self.fabric_radio.isChecked() else "vanilla"
+        generate_new = self.mode_new_radio.isChecked()
+
+        if generate_new:
+            self.world_name = self.new_world_name_edit.text().strip()
+            if not setup_flow.valid_new_world_name(self.world_name):
+                self.step1_msg.setText("")
+                self.loader_warning.setText('Please enter a valid world name (no \\ / : * ? " < > |).')
+                return
+        else:
+            self.world_name = self.world_combo.currentText()
 
         self.step2_box.setVisible(False)
         self.step3_box.setVisible(True)
         self.prepare_msg.setText("Preparing...")
         self.finish_btn.setEnabled(False)
 
-        self._worker = Worker(setup_flow.prepare_world, self.instance_dir, self.world_name)
+        if generate_new:
+            owner_username = self.owner_username_edit.text().strip()
+            self._worker = Worker(setup_flow.prepare_new_world, self.instance_dir, self.world_name, owner_username)
+        else:
+            self._worker = Worker(setup_flow.prepare_world, self.instance_dir, self.world_name)
         self._worker.finished_result.connect(self._on_prepare_done)
         self._worker.start()
 

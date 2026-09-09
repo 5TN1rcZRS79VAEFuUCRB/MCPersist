@@ -15,7 +15,9 @@ comes back automatically after a reboot (as long as your PC is on).
    on your Minecraft version - MCPersist checks and tells you if it's wrong).
 2. Download `MCPersist-windows.zip` from [Releases](../../releases) and extract it.
 3. Run `MCPersist.exe` inside the extracted folder. Click **Set Up New World**, pick
-   your Minecraft instance folder and world, and follow the wizard.
+   your Minecraft instance folder, then either select one of your existing
+   singleplayer worlds to promote or generate a brand-new one from scratch, and
+   follow the wizard.
 4. Click **Start**. The join address shown is what you give your friends.
 
 No Python install needed for this path - everything's bundled into the folder.

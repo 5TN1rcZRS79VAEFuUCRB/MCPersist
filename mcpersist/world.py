@@ -135,6 +135,19 @@ def read_prism_java_major(instance_dir):
     return None
 
 
+def read_prism_intended_version(instance_dir):
+    """Prism Launcher records the instance's Minecraft version in instance.cfg (one
+    level above the .minecraft folder) - used to prefill the version field when
+    generating a brand-new world, since there's no level.dat yet to read it from."""
+    cfg_path = Path(instance_dir).parent / "instance.cfg"
+    if not cfg_path.exists():
+        return None
+    for line in cfg_path.read_text(encoding="utf-8", errors="replace").splitlines():
+        if line.startswith("IntendedVersion="):
+            return line.split("=", 1)[1].strip() or None
+    return None
+
+
 def required_java_major(mc_version_str, instance_dir=None):
     if instance_dir:
         from_prism = read_prism_java_major(instance_dir)
