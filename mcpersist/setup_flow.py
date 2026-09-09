@@ -46,11 +46,17 @@ def detect_new_world_info(instance_dir):
 
 
 def valid_new_world_name(world_name):
-    if not world_name or not world_name.strip():
+    if not world_name or not world_name.strip() or len(world_name) > 100:
         return False
-    # It becomes a directory name directly under servers/ - keep it a plain name, not
-    # a path (no separators, no "..").
-    return world_name not in (".", "..") and not any(c in world_name for c in "\\/:*?\"<>|")
+    # It becomes a directory name directly under servers/ (no separators/"..", so it
+    # can't escape that directory) and gets written verbatim into server.properties'
+    # motd line - also reject control characters (newlines in particular), which
+    # would otherwise inject extra lines into that file.
+    if world_name in (".", ".."):
+        return False
+    if any(c in world_name for c in "\\/:*?\"<>|"):
+        return False
+    return all(ord(c) >= 0x20 for c in world_name)
 
 
 def write_eula(server_dir):

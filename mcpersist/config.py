@@ -122,16 +122,19 @@ MAX_DISTANCE = 32  # Minecraft's own ceiling for both
 def ensure_view_distance(cfg):
     """Same auto/manual resolution as ensure_memory_mb: freshly recomputed from
     current specs when performance_auto is on, otherwise the user's explicit choice
-    (floored at MIN_VIEW_DISTANCE regardless, since Minecraft rejects lower)."""
+    (clamped to [MIN_VIEW_DISTANCE, MAX_DISTANCE] regardless - the GUI's spinbox
+    already enforces this range, but config.json can be hand-edited outside it)."""
     if cfg.get("performance_auto", True):
         return suggest_view_distance()
-    return max(MIN_VIEW_DISTANCE, cfg.get("view_distance") or suggest_view_distance())
+    value = cfg.get("view_distance") or suggest_view_distance()
+    return min(MAX_DISTANCE, max(MIN_VIEW_DISTANCE, value))
 
 
 def ensure_simulation_distance(cfg):
     if cfg.get("performance_auto", True):
         return suggest_simulation_distance()
-    return max(MIN_SIMULATION_DISTANCE, cfg.get("simulation_distance") or suggest_simulation_distance())
+    value = cfg.get("simulation_distance") or suggest_simulation_distance()
+    return min(MAX_DISTANCE, max(MIN_SIMULATION_DISTANCE, value))
 
 
 def ensure_memory_mb(cfg):

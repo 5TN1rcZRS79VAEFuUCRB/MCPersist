@@ -18,6 +18,19 @@ def portable_java_exe(major):
     return BIN_DIR / f"java{major}" / "bin" / "java.exe"
 
 
+def _safe_extract(zf, dest_dir):
+    """zipfile.extractall() doesn't guard against a "zip slip" archive whose entry
+    names contain ../ sequences that resolve outside dest_dir - Adoptium's API is a
+    trusted, pinned, HTTPS source, so this is defense-in-depth rather than a live
+    threat, but it's cheap to just not trust archive contents by default."""
+    dest_dir = dest_dir.resolve()
+    for member in zf.infolist():
+        target = (dest_dir / member.filename).resolve()
+        if target != dest_dir and dest_dir not in target.parents:
+            raise ValueError(f"refusing to extract {member.filename!r} - escapes the target directory")
+    zf.extractall(dest_dir)
+
+
 def download_java(major):
     """Downloads and extracts a Temurin JRE for the given major version into
     bin/java<major>/, returning the java.exe path. Raises on failure - callers turn
@@ -35,7 +48,7 @@ def download_java(major):
     if extract_dir.exists():
         shutil.rmtree(extract_dir)
     with zipfile.ZipFile(tmp_zip) as zf:
-        zf.extractall(extract_dir)
+        _safe_extract(zf, extract_dir)
     tmp_zip.unlink()
 
     # The zip contains one top-level folder (e.g. "jdk-21.0.5+11-jre") whose exact
