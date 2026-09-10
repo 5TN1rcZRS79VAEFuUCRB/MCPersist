@@ -197,7 +197,13 @@ def check_update_success():
     except OSError:
         return None
     marker_path.unlink(missing_ok=True)
-    return VERSION if target and VERSION == target else None
+    # mark_update_pending() is handed check_latest_release()'s "version" field
+    # verbatim, which is the raw GitHub tag name (e.g. "v0.1.24") - VERSION itself
+    # never has that "v" prefix, so comparing them as plain strings without
+    # normalizing first meant this could never match, confirmed by a real end-to-end
+    # test: the marker was written and consumed correctly, but the success banner
+    # never appeared because "0.1.24" != "v0.1.24".
+    return VERSION if target and _parse_version(target) == _parse_version(VERSION) else None
 
 
 def apply_update(download_url):
