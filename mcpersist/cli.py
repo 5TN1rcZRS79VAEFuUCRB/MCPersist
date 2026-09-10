@@ -255,7 +255,14 @@ def cmd_tray(args):
     subprocess.Popen(
         [str(pythonw), "-m", "mcpersist.tray_app"],
         cwd=str(BASE_DIR),
-        creationflags=subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS,
+        # Same reasoning as process_manager.DETACHED_FLAGS - CREATE_NO_WINDOW over
+        # DETACHED_PROCESS, plus CREATE_BREAKAWAY_FROM_JOB so it survives independent
+        # of whatever launched this CLI process.
+        creationflags=(
+            subprocess.CREATE_NEW_PROCESS_GROUP
+            | subprocess.CREATE_NO_WINDOW
+            | subprocess.CREATE_BREAKAWAY_FROM_JOB
+        ),
         close_fds=True,
     )
     print("Tray icon launched.")

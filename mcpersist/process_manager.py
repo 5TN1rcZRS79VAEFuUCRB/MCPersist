@@ -8,7 +8,25 @@ from pathlib import Path
 
 import psutil
 
-DETACHED_FLAGS = subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS
+# CREATE_NO_WINDOW, not DETACHED_PROCESS: java.exe (and python.exe, for the tunnel
+# client) are console-subsystem executables. DETACHED_PROCESS gives them *no* console
+# at all rather than a genuinely suppressed one, and a console-subsystem program
+# started that way can end up allocating its own new, visible console as a fallback -
+# exactly the "a cmd window popped up on screen" report this was chasing, and a
+# real risk once it happens: a classic console left visible with QuickEdit mode on
+# freezes the whole process the instant someone clicks into it to select text (it
+# blocks on the next console write until the selection is cancelled), which is
+# consistent with a real server.out.log showing a 42-second tick freeze and a stray
+# keystroke right as every player got disconnected. CREATE_NO_WINDOW is the flag
+# actually documented for "run a console app with no window at all" and was already
+# confirmed to fix the equivalent problem for the self-updater's PowerShell child
+# (see update_checker.py). CREATE_BREAKAWAY_FROM_JOB is kept for the same reason as
+# there too: these processes are meant to outlive the GUI/tray process unconditionally.
+DETACHED_FLAGS = (
+    subprocess.CREATE_NEW_PROCESS_GROUP
+    | subprocess.CREATE_NO_WINDOW
+    | subprocess.CREATE_BREAKAWAY_FROM_JOB
+)
 
 # Java's NIO on Windows opens an AF_UNIX loopback socket internally, whose path length
 # is capped (~108 bytes). A long user profile path (e.g. C:\Users\<long-name>\AppData\
