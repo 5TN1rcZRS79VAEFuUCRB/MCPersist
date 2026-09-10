@@ -2,6 +2,7 @@
 so neither duplicates it."""
 
 import json
+import time
 from dataclasses import dataclass, field
 
 from . import config, java_manager, javacheck, mojang, process_manager, rcon, server_vanilla, tunnel_relay, world
@@ -88,11 +89,38 @@ def start_server(cfg, server_dir):
 
     memory_mb = config.ensure_memory_mb(cfg)
     cmd = [java_path, f"-Xmx{memory_mb}M", f"-Xms{memory_mb}M", "-jar", str(jar_path), "nogui"]
-    pid = process_manager.launch_detached(
-        cmd, cwd=server_dir, log_path=server_dir / "logs" / "server.out.log", short_tmp=True
-    )
+    log_path = server_dir / "logs" / "server.out.log"
+    pid = process_manager.launch_detached(cmd, cwd=server_dir, log_path=log_path, short_tmp=True)
     process_manager.write_pid(server_pid_path, pid)
-    return ActionResult(True, [f"Server started (pid {pid}). Logs: {server_dir / 'logs' / 'server.out.log'}"])
+
+    # launch_detached() only confirms the OS accepted the launch, not that the server
+    # actually came up - a world directory already locked by another still-running
+    # server process (see stop_server's pid-file fix above for how that could happen),
+    # a corrupt jar, or any other fast-crash cause all look identical to success
+    # without this check. Polling rather than one fixed sleep: a real doomed launch
+    # (e.g. the world-lock case) only fails *after* the JVM boots and 50+ mods load -
+    # confirmed by reproduction to take 7-13s, not the couple seconds a single sleep
+    # would catch - but exits as soon as the log reports "Done" too, so a normal
+    # successful start isn't stuck waiting out the full window on the common path.
+    for _ in range(24):
+        if not process_manager.is_running(pid):
+            break
+        if log_path.exists() and "Done" in log_path.read_text(encoding="utf-8", errors="replace"):
+            break
+        time.sleep(0.5)
+    if not process_manager.is_running(pid):
+        server_pid_path.unlink(missing_ok=True)
+        tail = ""
+        if log_path.exists():
+            tail = "\n".join(log_path.read_text(encoding="utf-8", errors="replace").splitlines()[-6:])
+        return ActionResult(
+            False,
+            [
+                "Server process exited immediately - it didn't actually start.",
+                tail if tail else f"Check {log_path} for details.",
+            ],
+        )
+    return ActionResult(True, [f"Server started (pid {pid}). Logs: {log_path}"])
 
 
 def start_tunnel(cfg, server_dir):
@@ -109,22 +137,43 @@ def start_tunnel(cfg, server_dir):
 
 
 def stop_server(cfg, server_dir):
-    server_pid = process_manager.read_pid(server_dir / "server.pid")
+    server_pid_path = server_dir / "server.pid"
+    server_pid = process_manager.read_pid(server_pid_path)
     lines = []
     if process_manager.is_running(server_pid):
         lines.append("Stopping Minecraft server (RCON stop) ...")
         process_manager.stop_server_gracefully("127.0.0.1", cfg["rcon_port"], cfg["rcon_password"], server_pid)
-    (server_dir / "server.pid").unlink(missing_ok=True)
+        # Only forget the pid if the process is actually gone - deleting it
+        # unconditionally (the previous behavior) meant a stop that failed to
+        # actually kill the process (RCON unreachable, or it just took longer than
+        # the graceful/kill timeouts) left the app believing "stopped" while a real
+        # server was still running and still holding the world's directory lock.
+        # The next Start then launched a second java.exe against the same world,
+        # which correctly refused to run (Minecraft's own lock, not a new bug there)
+        # while the original, now-untracked process kept running indefinitely -
+        # exactly "says stopped but still running, still connectable" in practice.
+        if process_manager.is_running(server_pid):
+            lines.append(
+                f"WARNING: couldn't actually stop it (pid {server_pid} is still running) - "
+                "leaving it tracked as running rather than losing track of it. Try Stop again, "
+                "or end the process yourself if it's stuck."
+            )
+            return ActionResult(False, lines)
+    server_pid_path.unlink(missing_ok=True)
     return ActionResult(True, lines)
 
 
 def stop_tunnel(server_dir):
-    tunnel_pid = process_manager.read_pid(server_dir / "tunnel.pid")
+    tunnel_pid_path = server_dir / "tunnel.pid"
+    tunnel_pid = process_manager.read_pid(tunnel_pid_path)
     lines = []
     if process_manager.is_running(tunnel_pid):
         lines.append("Stopping tunnel ...")
         process_manager.stop_pid(tunnel_pid)
-    (server_dir / "tunnel.pid").unlink(missing_ok=True)
+        if process_manager.is_running(tunnel_pid):
+            lines.append(f"WARNING: couldn't actually stop it (pid {tunnel_pid} is still running).")
+            return ActionResult(False, lines)
+    tunnel_pid_path.unlink(missing_ok=True)
     return ActionResult(True, lines)
 
 
