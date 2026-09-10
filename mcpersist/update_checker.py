@@ -166,6 +166,40 @@ def check_last_update_failure():
     return text or None
 
 
+def _update_pending_path():
+    return Path(tempfile.gettempdir()) / "mcpersist_update_pending.txt"
+
+
+def mark_update_pending(target_version):
+    """Called right before the app quits to hand off to the updater, so the next
+    launch can tell the user "you're now on vX.Y.Z" instead of the update's outcome
+    being completely invisible - right now a failure gets surfaced
+    (check_last_update_failure) but success didn't get any confirmation at all,
+    which is a big part of why the whole restart looked like nothing happened."""
+    try:
+        _update_pending_path().write_text(target_version, encoding="utf-8")
+    except OSError:
+        pass
+
+
+def check_update_success():
+    """If the previous launch quit to apply an update, returns the version this
+    instance is now actually running - but only if VERSION for real matches what
+    was expected, not just because an update was attempted. That keeps this honest
+    if the update didn't actually take effect (in which case check_last_update_failure
+    is what surfaces it instead) rather than claiming success just because a restart
+    happened. Only ever returned once - the marker is cleared either way."""
+    marker_path = _update_pending_path()
+    if not marker_path.exists():
+        return None
+    try:
+        target = marker_path.read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    marker_path.unlink(missing_ok=True)
+    return VERSION if target and VERSION == target else None
+
+
 def apply_update(download_url):
     """Downloads the release zip, validates it, then launches a detached updater
     script and returns - the caller is expected to exit right after so the updater

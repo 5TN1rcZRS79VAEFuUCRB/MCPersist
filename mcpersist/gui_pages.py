@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QRadioButton,
     QSpinBox,
+    QSystemTrayIcon,
     QTextEdit,
     QVBoxLayout,
     QWidget,
@@ -61,6 +62,11 @@ class StatusPage(QWidget):
         # that gets surfaced instead of the user just seeing "update available"
         # again with no idea anything went wrong last time.
         self._last_update_failure = update_checker.check_last_update_failure()
+        # The success-case counterpart to the failure check above - otherwise a
+        # completed update gives zero feedback on the other side of the restart
+        # either, which was a big part of why the whole thing looked like the app
+        # just closed rather than doing something intentional.
+        self._just_updated_to = update_checker.check_update_success()
 
         # ----- Status group -----
         status_box = QGroupBox()
@@ -223,6 +229,13 @@ class StatusPage(QWidget):
 
     def _on_update_check_done(self, result):
         self._pending_update = result
+        if self._just_updated_to:
+            self.update_box.setVisible(True)
+            self.update_label.setStyleSheet("color: #2ecc71; font-weight: bold;")
+            self.update_label.setText(f"Updated to {self._just_updated_to} - all set.")
+            self.update_btn.setVisible(False)
+            QTimer.singleShot(8000, lambda: self.update_box.setVisible(False))
+            return
         if self._last_update_failure:
             self.update_box.setVisible(True)
             self.update_label.setStyleSheet("color: #e74c3c; font-weight: bold;")
@@ -256,8 +269,22 @@ class StatusPage(QWidget):
             self.update_label.setStyleSheet("color: #e74c3c; font-weight: bold;")
             self.update_label.setText(f"Update failed: {result.message}")
             return
-        self.update_label.setText("Update downloaded - restarting...")
-        self.window().quit_app()
+        target_version = self._pending_update["version"]
+        update_checker.mark_update_pending(target_version)
+        self.update_label.setText(f"Updated to {target_version} - restarting now...")
+        window = self.window()
+        window.tray.showMessage(
+            "MCPersist",
+            f"Updating to {target_version}. The window will close and reopen "
+            "automatically in a few seconds - this is expected, not a crash.",
+            QSystemTrayIcon.MessageIcon.Information,
+            6000,
+        )
+        # Without this, quit_app() below fires in the same instant as the label/
+        # tray message above, so neither is ever actually seen - the whole update
+        # just looks like the app closed for no reason. A couple of seconds is
+        # enough to register both before the window (and tray icon) disappear.
+        QTimer.singleShot(2500, window.quit_app)
 
     def current_status(self):
         cfg = config.load()
