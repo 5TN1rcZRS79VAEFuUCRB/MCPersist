@@ -68,6 +68,25 @@ def _prompt_version(default_version):
 
 
 def cmd_setup(args):
+    # Switching to a previously set-up server needs no Minecraft instance at all -
+    # it was already fully set up the first time around - so it shouldn't be stuck
+    # behind picking/confirming an instance folder for a mode that doesn't use one.
+    # Offered first, before ever asking about an instance, whenever there's
+    # something to switch to.
+    known_servers = setup_flow.list_known_servers()
+    if known_servers:
+        idx = prompt_choice(
+            "What do you want to do?",
+            ["Set up a world from a Minecraft instance", "Switch to a previously set-up server"],
+        )
+        if idx == 1:
+            labels = [f"{s['world_name']} ({s['loader']} {s['mc_version']})" for s in known_servers]
+            server_idx = prompt_choice("Pick a server to switch to", labels)
+            result = setup_flow.switch_to_world(known_servers[server_idx]["world_name"])
+            for line in result.lines:
+                print(line)
+            return 0 if result.ok else 1
+
     instance_dir = args.instance_dir
     if not instance_dir:
         detected = setup_flow.find_instances()
@@ -85,22 +104,10 @@ def cmd_setup(args):
     if not worlds_result.ok:
         return 1
     worlds = worlds_result.data["worlds"]
-    known_servers = setup_flow.list_known_servers()
 
-    choices = ["Select an existing world", "Generate a new world"]
-    if known_servers:
-        choices.append("Switch to a previously set-up server")
     mode_idx = 1
-    if worlds or known_servers:
-        mode_idx = prompt_choice("What do you want to do?", choices)
-
-    if mode_idx == 2:
-        labels = [f"{s['world_name']} ({s['loader']} {s['mc_version']})" for s in known_servers]
-        idx = prompt_choice("Pick a server to switch to", labels)
-        result = setup_flow.switch_to_world(known_servers[idx]["world_name"])
-        for line in result.lines:
-            print(line)
-        return 0 if result.ok else 1
+    if worlds:
+        mode_idx = prompt_choice("What do you want to do?", ["Select an existing world", "Generate a new world"])
 
     generate_new = mode_idx == 1
 

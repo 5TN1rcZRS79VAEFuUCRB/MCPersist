@@ -590,6 +590,30 @@ class SetupPage(QWidget):
         self.step1_msg = QLabel("")
         self.step1_msg.setWordWrap(True)
         step1_layout.addWidget(self.step1_msg)
+
+        # A previously set-up server needs no Minecraft instance at all to switch
+        # to - it was already fully set up the first time around. This used to be
+        # a third option buried behind picking an instance and clicking Find
+        # Worlds first, which made no sense for a mode that doesn't touch either -
+        # it's a fully independent path now, available the moment the wizard
+        # opens, not gated behind the existing/new-world flow above at all.
+        self.switch_section = QWidget()
+        switch_section_layout = QVBoxLayout(self.switch_section)
+        switch_section_layout.setContentsMargins(0, 0, 0, 0)
+        switch_section_layout.addWidget(QLabel("— or —"))
+        switch_section_layout.addWidget(QLabel("Switch to a previously set-up server"))
+        self.switch_world_combo = QComboBox()
+        switch_section_layout.addWidget(self.switch_world_combo)
+        self.switch_world_msg = QLabel("Switches immediately - no download or setup needed.")
+        self.switch_world_msg.setWordWrap(True)
+        self.switch_world_msg.setStyleSheet("color: #888;")
+        switch_section_layout.addWidget(self.switch_world_msg)
+        switch_btn = QPushButton("Switch")
+        switch_btn.clicked.connect(self.on_switch_to_server)
+        switch_section_layout.addWidget(switch_btn)
+        step1_layout.addWidget(self.switch_section)
+        self.switch_section.setVisible(False)
+
         layout.addWidget(self.step1_box)
 
         # Step 2
@@ -599,17 +623,13 @@ class SetupPage(QWidget):
         mode_row = QHBoxLayout()
         self.mode_existing_radio = QRadioButton("Select Existing World")
         self.mode_new_radio = QRadioButton("Generate New World")
-        self.mode_switch_radio = QRadioButton("Switch to a Previous Server")
         self.mode_existing_radio.setChecked(True)
         self.mode_group = QButtonGroup(self)
         self.mode_group.addButton(self.mode_existing_radio)
         self.mode_group.addButton(self.mode_new_radio)
-        self.mode_group.addButton(self.mode_switch_radio)
         self.mode_existing_radio.toggled.connect(self.on_mode_changed)
-        self.mode_switch_radio.toggled.connect(self.on_mode_changed)
         mode_row.addWidget(self.mode_existing_radio)
         mode_row.addWidget(self.mode_new_radio)
-        mode_row.addWidget(self.mode_switch_radio)
         step2_layout.addLayout(mode_row)
 
         self.existing_world_box = QWidget()
@@ -632,23 +652,6 @@ class SetupPage(QWidget):
         new_layout.addWidget(self.owner_username_edit)
         step2_layout.addWidget(self.new_world_box)
         self.new_world_box.setVisible(False)
-
-        # Servers MCPersist has already set up before (scanned from servers/ itself,
-        # not tracked separately) - picking one just repoints config.json at it using
-        # its own saved settings, no re-download or owner-detection needed since all
-        # of that already happened the first time it was set up.
-        self.switch_world_box = QWidget()
-        switch_layout = QVBoxLayout(self.switch_world_box)
-        switch_layout.setContentsMargins(0, 0, 0, 0)
-        switch_layout.addWidget(QLabel("Previously set-up server"))
-        self.switch_world_combo = QComboBox()
-        switch_layout.addWidget(self.switch_world_combo)
-        self.switch_world_msg = QLabel("")
-        self.switch_world_msg.setWordWrap(True)
-        self.switch_world_msg.setStyleSheet("color: #888;")
-        switch_layout.addWidget(self.switch_world_msg)
-        step2_layout.addWidget(self.switch_world_box)
-        self.switch_world_box.setVisible(False)
 
         self.version_loader_box = QWidget()
         version_loader_layout = QVBoxLayout(self.version_loader_box)
@@ -723,6 +726,13 @@ class SetupPage(QWidget):
         self.step1_msg.setText("")
         self.new_world_name_edit.setText("")
         self.owner_username_edit.setText("")
+
+        # Independent of everything above - doesn't need an instance dir at all,
+        # so it's ready the moment the wizard opens rather than waiting on Find
+        # Worlds. Hidden entirely when there's nothing to switch to yet.
+        known_servers = self._populate_switch_world_combo()
+        self.switch_section.setVisible(bool(known_servers))
+
         self.step1_box.setVisible(True)
         self.step2_box.setVisible(False)
         self.step3_box.setVisible(False)
@@ -760,37 +770,30 @@ class SetupPage(QWidget):
 
     def on_mode_changed(self):
         is_existing = self.mode_existing_radio.isChecked()
-        is_switch = self.mode_switch_radio.isChecked()
         is_new = self.mode_new_radio.isChecked()
 
         self.existing_world_box.setVisible(is_existing)
         self.new_world_box.setVisible(is_new)
-        self.switch_world_box.setVisible(is_switch)
-        self.version_loader_box.setVisible(not is_switch)
-        self.loader_warning.setVisible(not is_switch)
-        self.continue_btn.setText("Switch" if is_switch else "Continue")
 
-        if is_switch:
-            self._populate_switch_world_combo()
-        elif is_existing:
+        if is_existing:
             self.on_world_selected(self.world_combo.currentText())
         elif is_new and self.instance_dir:
             info = setup_flow.detect_new_world_info(self.instance_dir)
             self._apply_detected_loader(info)
 
     def _populate_switch_world_combo(self):
+        """Returns the known-servers list too, so reset() doesn't need a second,
+        redundant scan of servers/ just to decide whether to show this section."""
         self.switch_world_combo.clear()
         servers = setup_flow.list_known_servers()
         if not servers:
-            self.switch_world_combo.addItem("(no previously set-up servers found)")
             self.switch_world_combo.setEnabled(False)
-            self.switch_world_msg.setText("")
-            return
+            return servers
         self.switch_world_combo.setEnabled(True)
         for server in servers:
             label = f"{server['world_name']} ({server['loader']} {server['mc_version']})"
             self.switch_world_combo.addItem(label, server["world_name"])
-        self.switch_world_msg.setText("Switches immediately - no download or setup needed.")
+        return servers
 
     def _apply_detected_loader(self, info):
         suggested = info["suggested_loader"]
@@ -848,19 +851,18 @@ class SetupPage(QWidget):
         info = setup_flow.detect_world_info(self.instance_dir, world_name)
         self._apply_detected_loader(info)
 
-    def on_prepare_world(self):
-        if self.mode_switch_radio.isChecked():
-            world_name = self.switch_world_combo.currentData()
-            if not world_name:
-                return
-            self.step2_box.setVisible(False)
-            self.step4_box.setVisible(True)
-            self.finish_msg.setText("Switching...")
-            self._worker = Worker(setup_flow.switch_to_world, world_name)
-            self._worker.finished_result.connect(self._on_switch_done)
-            self._worker.start()
+    def on_switch_to_server(self):
+        world_name = self.switch_world_combo.currentData()
+        if not world_name:
             return
+        self.step1_box.setVisible(False)
+        self.step4_box.setVisible(True)
+        self.finish_msg.setText("Switching...")
+        self._worker = Worker(setup_flow.switch_to_world, world_name)
+        self._worker.finished_result.connect(self._on_switch_done)
+        self._worker.start()
 
+    def on_prepare_world(self):
         self.mc_version = self.mc_version_combo.currentText()
         self.loader = "fabric" if self.fabric_radio.isChecked() else "vanilla"
         generate_new = self.mode_new_radio.isChecked()
