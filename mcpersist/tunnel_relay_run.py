@@ -85,6 +85,12 @@ async def run_once(cfg):
         msg = json.loads(line.decode("utf-8"))
         if msg.get("type") == "connect":
             asyncio.create_task(handle_connect(relay_host, data_port, msg["id"]))
+        elif msg.get("type") == "ping":
+            # The relay's own liveness check (see relay_server.py's PING_TIMEOUT) -
+            # answering keeps this connection's subdomain from being evicted as
+            # stale while it's still genuinely alive and just has no players.
+            writer.write((json.dumps({"type": "pong"}) + "\n").encode("utf-8"))
+            await writer.drain()
 
 
 async def main():

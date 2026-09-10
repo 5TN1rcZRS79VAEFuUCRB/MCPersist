@@ -7,6 +7,7 @@ import argparse
 import asyncio
 import json
 import random
+import time
 import uuid
 
 from mc_handshake import read_handshake
@@ -16,6 +17,20 @@ from auto_assignments import load_assignments, save_assignments
 CONNECT_TIMEOUT = 10
 HANDSHAKE_TIMEOUT = 10  # a client that never finishes its handshake shouldn't hold a connection open forever
 MAX_AUTO_CONNECTIONS_PER_IP = 3
+
+# A control connection is only ever recognized as dead by a clean TCP close
+# (reader.readline() returning EOF) - fine for a normal disconnect, but a tunnel
+# client that gets force-killed, crashes, or drops off the network without sending
+# a FIN leaves the socket looking perfectly healthy to the relay indefinitely (TCP
+# has no built-in way to notice this on its own for a long time). That leaves the
+# subdomain permanently occupied by a connection nothing is using anymore, so a
+# real reconnection attempt gets rejected forever with "already connected from this
+# address" - confirmed as a real occurrence, not just theoretical, from a client
+# stuck reconnecting every 5s with no way to ever get back in. Sending our own ping
+# and requiring a reply within PING_TIMEOUT catches that instead of trusting TCP to
+# notice on its own.
+PING_INTERVAL = 20
+PING_TIMEOUT = 45
 
 clients = {}  # subdomain -> StreamWriter of the control connection
 pending = {}  # connection id -> asyncio.Future resolving to (data_reader, data_writer)
@@ -63,9 +78,33 @@ async def send_json(writer, obj):
     await writer.drain()
 
 
+async def _ping_loop(writer, subdomain, last_seen):
+    """Runs alongside handle_control's own read loop for the same connection -
+    periodically pings the client and, if nothing has been heard from it (a pong or
+    anything else) within PING_TIMEOUT, closes the connection so a genuinely dead
+    client can't hold its subdomain hostage forever. Closing the writer here
+    unblocks the main handler's own blocked readline() (a closed transport
+    completes pending reads with EOF/an error), so the usual cleanup in its
+    `finally` block still runs normally."""
+    try:
+        while True:
+            await asyncio.sleep(PING_INTERVAL)
+            if time.monotonic() - last_seen[0] > PING_TIMEOUT:
+                print(f"[control] {subdomain} timed out (no response to ping) - evicting stale connection", flush=True)
+                writer.close()
+                return
+            try:
+                await send_json(writer, {"type": "ping"})
+            except Exception:
+                return
+    except asyncio.CancelledError:
+        pass
+
+
 async def handle_control(reader, writer):
     subdomain = None
     is_auto = False
+    ping_task = None
     peer_ip = (writer.get_extra_info("peername") or (None,))[0]
     try:
         line = await asyncio.wait_for(reader.readline(), timeout=HANDSHAKE_TIMEOUT)
@@ -110,13 +149,19 @@ async def handle_control(reader, writer):
         await send_json(writer, {"type": "registered", "subdomain": subdomain})
         print(f"[control] {subdomain} registered{f' (auto, ip={peer_ip})' if is_auto else ''}", flush=True)
 
+        last_seen = [time.monotonic()]
+        ping_task = asyncio.create_task(_ping_loop(writer, subdomain, last_seen))
+
         while True:
             data = await reader.readline()
             if not data:
                 break
+            last_seen[0] = time.monotonic()
     except (asyncio.IncompleteReadError, asyncio.TimeoutError, ConnectionResetError, json.JSONDecodeError):
         pass
     finally:
+        if ping_task:
+            ping_task.cancel()
         if subdomain and clients.get(subdomain) is writer:
             del clients[subdomain]
             print(f"[control] {subdomain} disconnected", flush=True)
