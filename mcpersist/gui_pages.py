@@ -433,6 +433,9 @@ class StatusPage(QWidget):
         cfg["memory_auto"] = is_auto
         cfg["memory_mb"] = chosen_gb * 1024
         config.save(cfg)
+        server_dir = config.server_dir(cfg)
+        if server_dir:
+            setup_flow.write_world_meta(server_dir, cfg)
 
         if is_auto:
             self.ram_msg.setText(
@@ -486,6 +489,9 @@ class StatusPage(QWidget):
         cfg["view_distance"] = chosen_view
         cfg["simulation_distance"] = chosen_sim
         config.save(cfg)
+        server_dir = config.server_dir(cfg)
+        if server_dir:
+            setup_flow.write_world_meta(server_dir, cfg)
 
         if is_auto:
             self.perf_msg.setText(
