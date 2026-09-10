@@ -23,7 +23,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtGui import QGuiApplication
 
 from . import actions, config, server_vanilla, setup_flow, update_checker
-from .gui_worker import Worker
+from .gui_worker import Worker, WorkerError
 from .paths import BASE_DIR
 
 
@@ -240,32 +240,21 @@ class StatusPage(QWidget):
         self.update_btn.setText("Update Now")
         self.update_box.setVisible(True)
 
-    @staticmethod
-    def _do_apply_update(download_url):
-        # Worker doesn't catch exceptions from the function it runs, and apply_update
-        # raises on failure (network error, not a frozen build, etc.) - turn that into
-        # a plain return value instead, same shape as everything else Worker calls.
-        try:
-            update_checker.apply_update(download_url)
-            return None
-        except Exception as e:
-            return str(e)
-
     def on_update_now(self):
         if not self._pending_update:
             return
         self.update_btn.setEnabled(False)
         self.update_label.setStyleSheet("color: #2ecc71; font-weight: bold;")
         self.update_label.setText("Downloading update...")
-        self._update_apply_worker = Worker(self._do_apply_update, self._pending_update["download_url"])
+        self._update_apply_worker = Worker(update_checker.apply_update, self._pending_update["download_url"])
         self._update_apply_worker.finished_result.connect(self._on_update_applied)
         self._update_apply_worker.start()
 
-    def _on_update_applied(self, error):
-        if error is not None:
+    def _on_update_applied(self, result):
+        if isinstance(result, WorkerError):
             self.update_btn.setEnabled(True)
             self.update_label.setStyleSheet("color: #e74c3c; font-weight: bold;")
-            self.update_label.setText(f"Update failed: {error}")
+            self.update_label.setText(f"Update failed: {result.message}")
             return
         self.update_label.setText("Update downloaded - restarting...")
         self.window().quit_app()
@@ -343,6 +332,12 @@ class StatusPage(QWidget):
         self._worker.start()
 
     def _on_action_done(self, verb, results):
+        if isinstance(results, WorkerError):
+            self.action_msg.setStyleSheet("color: #e74c3c;")
+            self.action_msg.setText(f"{verb} failed: {results.message}")
+            self.refresh()
+            QTimer.singleShot(10000, lambda: self.action_msg.setText(""))
+            return
         all_ok = all(r.ok for r in results)
         lines = [line for r in results for line in r.lines]
         self.action_msg.setStyleSheet("color: #888;" if all_ok else "color: #e74c3c;")
@@ -803,6 +798,11 @@ class SetupPage(QWidget):
         self.loader = "fabric" if self.fabric_radio.isChecked() else "vanilla"
         generate_new = self.mode_new_radio.isChecked()
 
+        if not self.mc_version_combo.isEnabled() or not self.mc_version:
+            self.step1_msg.setText("")
+            self.loader_warning.setText("Still loading the version list - wait a moment and try again.")
+            return
+
         owner_username = None
         if generate_new:
             self.world_name = self.new_world_name_edit.text().strip()
@@ -833,12 +833,19 @@ class SetupPage(QWidget):
         self._worker.start()
 
     def _on_prepare_done(self, result):
+        if isinstance(result, WorkerError):
+            self.prepare_msg.setText(f"Failed: {result.message}")
+            self.finish_btn.setEnabled(False)
+            return
         self.prepare_msg.setText("\n".join(result.lines))
         self.owner_uuid = result.data.get("owner_uuid")
         self.owner_name = result.data.get("owner_name")
         self.finish_btn.setEnabled(True)
 
     def _on_switch_done(self, result):
+        if isinstance(result, WorkerError):
+            self.finish_msg.setText(f"Failed: {result.message}")
+            return
         self.finish_msg.setText("\n".join(result.lines))
 
     def on_finish_setup(self):
@@ -860,6 +867,9 @@ class SetupPage(QWidget):
     def _on_finish_done(self, result):
         self.finish_btn.setEnabled(True)
         self.finish_btn.setText("Finish Setup")
+        if isinstance(result, WorkerError):
+            self.prepare_msg.setText(f"Setup failed: {result.message}")
+            return
         self.finish_msg.setText("\n".join(result.lines))
         self.step3_box.setVisible(False)
         self.step4_box.setVisible(True)
