@@ -215,6 +215,25 @@ def apply_update(download_url):
             "-LogPath",
             str(log_path),
         ],
-        creationflags=subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS,
+        # CREATE_NO_WINDOW, not DETACHED_PROCESS - confirmed by real, repeated
+        # reproduction (not just reading about it) that this distinction is the actual
+        # bug: DETACHED_PROCESS gives the child *no* console at all, and a plain
+        # powershell.exe -File child launched that way from a --windowed (console-less)
+        # parent reliably starts, then stalls forever before its very first line of
+        # script even runs - never writes a log line, never touches a file, no error,
+        # nothing - because PowerShell's own host initialization apparently doesn't
+        # handle having zero console object gracefully. CREATE_NO_WINDOW instead gives
+        # it a real console that's just hidden, which starts up fine. This is almost
+        # certainly what the friend's "update just closed and never came back" report
+        # actually was: the app quits right after spawning this process, so a silently
+        # stalled updater looks identical to a closed app with nothing left running.
+        # CREATE_BREAKAWAY_FROM_JOB is kept too - cheap insurance so this survives
+        # independent of whatever job object (if any) its parent happens to be in,
+        # matching the actual intent: outlive the parent unconditionally.
+        creationflags=(
+            subprocess.CREATE_NEW_PROCESS_GROUP
+            | subprocess.CREATE_NO_WINDOW
+            | subprocess.CREATE_BREAKAWAY_FROM_JOB
+        ),
         close_fds=True,
     )
