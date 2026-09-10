@@ -61,6 +61,12 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle("MCPersist")
         self.resize(420, 560)
+        # A long unbroken status message (a full file path with no spaces to wrap
+        # at, say) can otherwise force the window to stretch far wider than
+        # intended to fit it on one line, and Qt doesn't shrink it back down again
+        # once that happens - a hard cap means the worst case is wrapped/clipped
+        # text in a normal-sized window, not a window that grows and stays huge.
+        self.setMaximumWidth(700)
         self._really_quit = False
 
         self.stack = QStackedWidget()

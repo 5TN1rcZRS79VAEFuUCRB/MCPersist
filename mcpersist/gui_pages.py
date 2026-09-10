@@ -128,6 +128,11 @@ class StatusPage(QWidget):
         self.action_msg = QLabel("")
         self.action_msg.setStyleSheet("color: #888;")
         self.action_msg.setAlignment(Qt.AlignCenter)
+        # Unlike every other status label in this file, this one was missing
+        # setWordWrap - _on_action_done joins the start/stop results (which include
+        # full log file paths) into one unwrapped string, which was stretching the
+        # whole window wider to fit it on one line and never shrinking back after.
+        self.action_msg.setWordWrap(True)
         layout.addWidget(self.action_msg)
 
         # ----- World group -----
