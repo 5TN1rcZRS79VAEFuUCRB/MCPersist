@@ -584,9 +584,27 @@ class SetupPage(QWidget):
         instance_dir_row.addWidget(self.instance_dir_edit, 1)
         instance_dir_row.addWidget(browse_btn)
         step1_layout.addLayout(instance_dir_row)
-        find_btn = QPushButton("Find Worlds")
-        find_btn.clicked.connect(self.on_find_worlds)
-        step1_layout.addWidget(find_btn)
+
+        # Which of these two the button below actually needs to do is decided by
+        # the mode, chosen here rather than after a "Find Worlds" step - generating
+        # a new world doesn't need a world list at all (it only needs the instance
+        # dir itself, for loader detection/mod copying), so gating it behind that
+        # button/label made no more sense than the old "Switch" gating did.
+        mode_row = QHBoxLayout()
+        self.mode_existing_radio = QRadioButton("Select Existing World")
+        self.mode_new_radio = QRadioButton("Generate New World")
+        self.mode_existing_radio.setChecked(True)
+        self.mode_group = QButtonGroup(self)
+        self.mode_group.addButton(self.mode_existing_radio)
+        self.mode_group.addButton(self.mode_new_radio)
+        self.mode_existing_radio.toggled.connect(self.on_step1_mode_changed)
+        mode_row.addWidget(self.mode_existing_radio)
+        mode_row.addWidget(self.mode_new_radio)
+        step1_layout.addLayout(mode_row)
+
+        self.find_or_continue_btn = QPushButton("Find Worlds")
+        self.find_or_continue_btn.clicked.connect(self.on_proceed_from_step1)
+        step1_layout.addWidget(self.find_or_continue_btn)
         self.step1_msg = QLabel("")
         self.step1_msg.setWordWrap(True)
         step1_layout.addWidget(self.step1_msg)
@@ -616,21 +634,10 @@ class SetupPage(QWidget):
 
         layout.addWidget(self.step1_box)
 
-        # Step 2
-        self.step2_box = QGroupBox("2. Choose world")
+        # Step 2 - just shows whichever content step 1's mode choice calls for; it
+        # doesn't offer its own mode choice anymore (that already happened above).
+        self.step2_box = QGroupBox("2. World details")
         step2_layout = QVBoxLayout(self.step2_box)
-
-        mode_row = QHBoxLayout()
-        self.mode_existing_radio = QRadioButton("Select Existing World")
-        self.mode_new_radio = QRadioButton("Generate New World")
-        self.mode_existing_radio.setChecked(True)
-        self.mode_group = QButtonGroup(self)
-        self.mode_group.addButton(self.mode_existing_radio)
-        self.mode_group.addButton(self.mode_new_radio)
-        self.mode_existing_radio.toggled.connect(self.on_mode_changed)
-        mode_row.addWidget(self.mode_existing_radio)
-        mode_row.addWidget(self.mode_new_radio)
-        step2_layout.addLayout(mode_row)
 
         self.existing_world_box = QWidget()
         existing_layout = QVBoxLayout(self.existing_world_box)
@@ -726,6 +733,8 @@ class SetupPage(QWidget):
         self.step1_msg.setText("")
         self.new_world_name_edit.setText("")
         self.owner_username_edit.setText("")
+        self.mode_existing_radio.setChecked(True)
+        self.on_step1_mode_changed()
 
         # Independent of everything above - doesn't need an instance dir at all,
         # so it's ready the moment the wizard opens rather than waiting on Find
@@ -749,21 +758,42 @@ class SetupPage(QWidget):
         if chosen:
             self.instance_dir_edit.setText(chosen)
 
-    def on_find_worlds(self):
+    def on_step1_mode_changed(self):
+        """Just relabels the step-1 button while still in step 1 - the actual
+        mode-specific work (listing worlds vs. detecting loader info) only happens
+        once it's actually clicked, in on_proceed_from_step1."""
+        is_new = self.mode_new_radio.isChecked()
+        self.find_or_continue_btn.setText("Continue" if is_new else "Find Worlds")
+
+    def on_proceed_from_step1(self):
         instance_dir = self.instance_dir_edit.text()
         result = setup_flow.list_worlds(instance_dir)
         if not result.ok:
             self.step1_msg.setText("\n".join(result.lines))
             return
-        self.step1_msg.setText("\n".join(result.lines))
         self.instance_dir = instance_dir
-        self.world_combo.clear()
+
+        if self.mode_new_radio.isChecked():
+            # Generating a new world never needed the worlds list at all - only the
+            # instance dir itself, for loader detection/mod copying later - so
+            # there's nothing further to check here now that the dir's confirmed
+            # to exist.
+            self.step1_msg.setText("")
+            self.on_mode_changed()
+            self.step1_box.setVisible(False)
+            self.step2_box.setVisible(True)
+            return
+
         worlds = result.data["worlds"]
+        if not worlds:
+            self.step1_msg.setText(
+                f'No existing worlds found under "{instance_dir}\\saves" - '
+                'pick "Generate New World" above instead.'
+            )
+            return
+        self.step1_msg.setText("\n".join(result.lines))
+        self.world_combo.clear()
         self.world_combo.addItems(worlds)
-        # No existing worlds to pick from - generating a new one is the only option.
-        self.mode_new_radio.setChecked(not worlds)
-        self.mode_existing_radio.setChecked(bool(worlds))
-        self.mode_existing_radio.setEnabled(bool(worlds))
         self.on_mode_changed()
         self.step1_box.setVisible(False)
         self.step2_box.setVisible(True)
