@@ -12,8 +12,10 @@ comes back automatically after a reboot (as long as your PC is on).
 ## Quickstart
 
 1. Download `MCPersist-windows.zip` from [Releases](../../releases) and extract it.
-2. Run `MCPersist.exe` inside the extracted folder. Click **Set Up New World**, pick
-   your Minecraft instance folder, then either select one of your existing
+2. Run `MCPersist.exe` inside the extracted folder. Click **Set Up New World** -
+   instances from Prism/MultiMC/PolyMC/ATLauncher and the official launcher are
+   detected automatically and offered as a pick-list; pick one, or point it at your
+   instance folder yourself if yours isn't found. Then either select one of your existing
    singleplayer worlds to promote, generate a brand-new one from scratch, or switch
    to a server you've already set up before (instant, no re-download), and follow the
    wizard - the right Java version downloads automatically if you don't already have

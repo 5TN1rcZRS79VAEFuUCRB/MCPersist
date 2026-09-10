@@ -14,6 +14,10 @@ def default_instance_dir():
     return str(world.default_instance_dir() or "")
 
 
+def find_instances():
+    return world.find_instances()
+
+
 def list_worlds(instance_dir):
     if not instance_dir or not Path(instance_dir).exists():
         return ActionResult(False, [f"Instance folder not found: {instance_dir!r}"])

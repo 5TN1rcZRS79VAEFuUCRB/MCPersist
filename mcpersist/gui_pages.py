@@ -533,6 +533,17 @@ class SetupPage(QWidget):
         # Step 1
         self.step1_box = QGroupBox("1. Find worlds")
         step1_layout = QVBoxLayout(self.step1_box)
+
+        self.detected_instances_box = QWidget()
+        detected_layout = QVBoxLayout(self.detected_instances_box)
+        detected_layout.setContentsMargins(0, 0, 0, 0)
+        detected_layout.addWidget(QLabel("Detected Minecraft instances"))
+        self.detected_instances_combo = QComboBox()
+        self.detected_instances_combo.currentIndexChanged.connect(self.on_detected_instance_selected)
+        detected_layout.addWidget(self.detected_instances_combo)
+        step1_layout.addWidget(self.detected_instances_box)
+        self.detected_instances_box.setVisible(False)
+
         step1_layout.addWidget(QLabel("Minecraft instance folder"))
         instance_dir_row = QHBoxLayout()
         self.instance_dir_edit = QLineEdit()
@@ -663,7 +674,20 @@ class SetupPage(QWidget):
         layout.addStretch()
 
     def reset(self):
-        self.instance_dir_edit.setText(setup_flow.default_instance_dir())
+        instances = setup_flow.find_instances()
+        self.detected_instances_combo.blockSignals(True)
+        self.detected_instances_combo.clear()
+        for instance in instances:
+            self.detected_instances_combo.addItem(instance["name"], instance["path"])
+        self.detected_instances_combo.blockSignals(False)
+        self.detected_instances_box.setVisible(bool(instances))
+
+        # Prefill from the first detected instance if there is one - still just a
+        # starting point, the field underneath stays a plain editable text box for
+        # anything not auto-detected (a different account, an instance outside the
+        # launchers this looks for, etc).
+        prefill = instances[0]["path"] if instances else setup_flow.default_instance_dir()
+        self.instance_dir_edit.setText(prefill)
         self.step1_msg.setText("")
         self.new_world_name_edit.setText("")
         self.owner_username_edit.setText("")
@@ -671,6 +695,11 @@ class SetupPage(QWidget):
         self.step2_box.setVisible(False)
         self.step3_box.setVisible(False)
         self.step4_box.setVisible(False)
+
+    def on_detected_instance_selected(self, index):
+        path = self.detected_instances_combo.itemData(index)
+        if path:
+            self.instance_dir_edit.setText(path)
 
     def on_browse_instance_dir(self):
         start_dir = self.instance_dir_edit.text() or str(BASE_DIR)

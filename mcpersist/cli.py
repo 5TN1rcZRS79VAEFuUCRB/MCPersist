@@ -24,7 +24,15 @@ def prompt_choice(msg, options):
     for i, opt in enumerate(options, 1):
         print(f"  {i}. {opt}")
     while True:
-        raw = input(f"{msg} [1-{len(options)}]: ").strip()
+        # Same stray-BOM strip as prompt() - this used to be the one place it was
+        # missing, invisible as long as some other prompt() always ran first and
+        # silently absorbed a leading BOM before any prompt_choice() call. Real
+        # instances of this: the very first prompt in `setup` is a prompt_choice()
+        # whenever instances are auto-detected, and a piped/redirected stdin can
+        # genuinely carry a leading BOM (confirmed here, not hypothetical) - without
+        # this it read as "﻿1", never matched .isdigit(), and silently ate
+        # every subsequent input line as repeated failed attempts.
+        raw = input(f"{msg} [1-{len(options)}]: ").replace("﻿", "").strip()
         if raw.isdigit() and 1 <= int(raw) <= len(options):
             return int(raw) - 1
         print("Please enter a valid number.")
@@ -60,7 +68,15 @@ def _prompt_version(default_version):
 
 
 def cmd_setup(args):
-    instance_dir = args.instance_dir or setup_flow.default_instance_dir()
+    instance_dir = args.instance_dir
+    if not instance_dir:
+        detected = setup_flow.find_instances()
+        if detected:
+            labels = [f"{d['name']} - {d['path']}" for d in detected] + ["Type in a path manually"]
+            idx = prompt_choice("Detected Minecraft instances", labels)
+            instance_dir = detected[idx]["path"] if idx < len(detected) else None
+        if not instance_dir:
+            instance_dir = setup_flow.default_instance_dir()
     instance_dir = prompt("Minecraft instance folder", instance_dir)
 
     worlds_result = setup_flow.list_worlds(instance_dir)

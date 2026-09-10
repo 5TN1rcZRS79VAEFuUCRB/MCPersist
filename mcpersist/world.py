@@ -17,6 +17,77 @@ def default_instance_dir():
     return path if path.exists() else None
 
 
+# MultiMC-family launchers (Prism's own lineage) all use the same on-disk shape:
+# <LauncherRoot>/instances/<name>/minecraft/ (or, on some forks/older versions,
+# .minecraft/). Checked by folder name under %APPDATA% rather than anything more
+# specific, so a launcher added later just needs its folder name added here.
+_MULTIMC_FAMILY_LAUNCHERS = ("PrismLauncher", "MultiMC", "PolyMC", "ATLauncher")
+
+# A directory "looks like" a real Minecraft instance if it has any of these - not
+# launcher-specific parsing, so this works across launchers (and Minecraft versions)
+# without needing to know each one's exact metadata format. A brand-new instance
+# that's never actually been launched yet may have none of these, but there's
+# nothing useful to promote from one anyway (no world to detect a version/loader
+# from), so missing all of them is a reasonable thing to skip.
+_INSTANCE_MARKERS = ("saves", "mods", "resourcepacks", "options.txt", "servers.dat")
+
+
+def _looks_like_instance_dir(path):
+    return any((path / marker).exists() for marker in _INSTANCE_MARKERS)
+
+
+def find_instances():
+    """Scans common launcher locations under %APPDATA% for Minecraft instance
+    folders, so setup can offer a pick-list instead of requiring the instance
+    folder to be typed in or browsed to by hand every time. Best-effort and
+    heuristic (see _looks_like_instance_dir) rather than parsing each launcher's
+    own format, so it degrades gracefully instead of needing an update every time
+    a launcher changes its metadata - and manual entry/Browse still work
+    regardless of what this finds. Returns a list of {"name", "path"} dicts,
+    already de-duplicated by resolved path."""
+    appdata = os.environ.get("APPDATA")
+    if not appdata:
+        return []
+    appdata = Path(appdata)
+    found = []
+    seen_paths = set()
+
+    def add(name, path):
+        resolved = str(path.resolve())
+        if resolved in seen_paths:
+            return
+        seen_paths.add(resolved)
+        found.append({"name": name, "path": resolved})
+
+    vanilla = appdata / ".minecraft"
+    if vanilla.exists() and _looks_like_instance_dir(vanilla):
+        add("Official Launcher", vanilla)
+
+    for launcher_name in _MULTIMC_FAMILY_LAUNCHERS:
+        instances_dir = appdata / launcher_name / "instances"
+        if not instances_dir.exists():
+            continue
+        try:
+            entries = sorted(instances_dir.iterdir())
+        except OSError:
+            continue
+        for instance_dir in entries:
+            if not instance_dir.is_dir():
+                continue
+            nested = next(
+                (instance_dir / sub for sub in ("minecraft", ".minecraft") if (instance_dir / sub).exists()),
+                None,
+            )
+            if nested is not None and _looks_like_instance_dir(nested):
+                add(f"{instance_dir.name} ({launcher_name})", nested)
+            elif _looks_like_instance_dir(instance_dir):
+                # Some launchers (e.g. ATLauncher) put Minecraft's own files
+                # directly in the instance folder instead of a nested subfolder.
+                add(f"{instance_dir.name} ({launcher_name})", instance_dir)
+
+    return found
+
+
 def list_saves(instance_dir):
     saves_dir = Path(instance_dir) / "saves"
     if not saves_dir.exists():
