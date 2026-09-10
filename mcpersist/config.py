@@ -2,6 +2,7 @@
 settings to use, each auto-sized from system specs unless overridden."""
 
 import json
+import os
 import secrets
 
 from .paths import CONFIG_PATH, SERVERS_DIR
@@ -49,7 +50,17 @@ def load():
 
 
 def save(cfg):
-    CONFIG_PATH.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
+    # Write-then-rename, not a direct write: os.replace is atomic, so a crash or
+    # power loss mid-write can't leave a truncated/corrupt config.json behind -
+    # which would otherwise break every future launch until someone notices and
+    # fixes it by hand. Same pattern already used for relay/users.json and
+    # auto_assignments.json; config.json is the single most-written file in the
+    # whole app (every RAM/performance save, every setup, every relay config
+    # change) and holds the rcon password and relay token, so it's worth the same
+    # protection those already have.
+    tmp_path = CONFIG_PATH.with_suffix(".json.tmp")
+    tmp_path.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
+    os.replace(tmp_path, CONFIG_PATH)
 
 
 def server_dir(cfg):

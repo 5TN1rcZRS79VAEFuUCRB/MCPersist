@@ -13,8 +13,15 @@ def _send_packet(sock, packet_id, packet_type, body):
     sock.sendall(struct.pack("<i", len(payload)) + payload)
 
 
+MAX_PACKET_LENGTH = 1 << 20  # RCON responses are normally at most a few KB; this is
+# generous headroom, not a limit an unexpected length can use to make us try to
+# allocate/read an absurd amount from what's always meant to be our own local server.
+
+
 def _read_packet(sock):
     length = struct.unpack("<i", _recv_exact(sock, 4))[0]
+    if length < 0 or length > MAX_PACKET_LENGTH:
+        raise ValueError(f"RCON packet length {length} out of expected range")
     data = _recv_exact(sock, length)
     packet_id, packet_type = struct.unpack("<ii", data[:8])
     body = data[8:-2].decode("utf-8", errors="replace")
