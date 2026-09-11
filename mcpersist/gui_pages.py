@@ -17,7 +17,6 @@ from PySide6.QtWidgets import (
     QPushButton,
     QRadioButton,
     QSpinBox,
-    QSystemTrayIcon,
     QTextEdit,
     QVBoxLayout,
     QWidget,
@@ -304,19 +303,18 @@ class StatusPage(QWidget):
             return
         target_version = self._pending_update["version"]
         update_checker.mark_update_pending(target_version)
-        self.update_label.setText(f"Updated to {target_version} - restarting now...")
-        window = self.window()
-        window.tray.showMessage(
-            "MCPersist",
-            f"Updating to {target_version}. The window will close and reopen "
-            "automatically in a few seconds - this is expected, not a crash.",
-            QSystemTrayIcon.MessageIcon.Information,
-            6000,
+        self.update_label.setText(
+            f"Updated to {target_version} - the window will close and reopen automatically "
+            "in a moment. This is expected, not a crash."
         )
-        # Without this, quit_app() below fires in the same instant as the label/
-        # tray message above, so neither is ever actually seen - the whole update
+        window = self.window()
+        # Without this, quit_app() below fires in the same instant as the label
+        # change above, so the label is never actually seen - the whole update
         # just looks like the app closed for no reason. A couple of seconds is
-        # enough to register both before the window (and tray icon) disappear.
+        # enough to register it before the window disappears. apply_update()
+        # already extracted and validated the new build into a staging directory
+        # before this ever ran, so what happens after quitting is just a fast
+        # directory copy + relaunch, not a fresh extraction that could still fail.
         QTimer.singleShot(2500, window.quit_app)
 
     def current_status(self):

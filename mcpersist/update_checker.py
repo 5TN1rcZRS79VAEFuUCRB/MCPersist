@@ -1,11 +1,18 @@
 """Checks GitHub Releases for a newer version and, for the packaged .exe, can
 download and apply the update itself - so using MCPersist doesn't mean remembering to
-go check GitHub by hand. Self-replacing a running app's own files is inherently a bit
-risky, so this sticks to a standard, well-understood pattern: download the new build,
-hand off to a detached helper script that waits for this process to exit, extracts
-over the install directory, and relaunches - rather than anything cleverer."""
+go check GitHub by hand. Windows won't let a running program overwrite its own loaded
+.exe/DLLs, so quitting to hand off to a detached helper script can't be avoided
+entirely - but everything that CAN be checked while still running (the download is a
+real zip, it's not zip-slipping anywhere, it actually contains MCPersist.exe) happens
+before ever committing to that quit: apply_update() extracts into a staging directory
+and validates it right here, so a bad download shows up as a normal, visible "Update
+failed" with the app still open, not a mystery after the point of no return. The
+handoff script's job then shrinks to just moving that already-proven-good staging
+directory into place and relaunching, rather than a fresh extraction of its own that
+could still fail for reasons this process could have caught first."""
 
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -78,19 +85,19 @@ def _validate_zip_entries(zf, dest_dir):
 # Windows username - "C:\Users\O'Brien\..." is a completely ordinary path - would
 # break the quoting and could turn into something other than the intended command.
 #
-# Logs every step to $LogPath and retries the extract: a process disappearing from
+# StagingDir already holds a fully extracted, already-validated update (see
+# apply_update) - this script's only real job is waiting for the old process to
+# actually exit, then copying that proven-good content over the install directory.
+# Logs every step to $LogPath and retries the copy: a process disappearing from
 # Get-Process doesn't guarantee every handle on its own files (especially the DLLs in
 # _internal/) is released the same instant, and antivirus real-time scanning can also
 # briefly hold a lock on a just-written exe - both look like a transient "file in use"
-# failure from Expand-Archive. The original version had no error handling at all, so a
-# failure here just silently killed the script before it ever reached Start-Process:
-# the app would quit (having already handed off to this script) and nothing would come
-# back, with zero record of what went wrong. On failure the log and zip are left in
-# place (for diagnosis) instead of deleted, and the app checks for a leftover log on
-# next launch to surface the failure instead of leaving the user with no feedback at all.
+# failure from Copy-Item. On failure the log and staging directory are left in place
+# (for diagnosis) instead of deleted, and the app checks for a leftover log on next
+# launch to surface the failure instead of leaving the user with no feedback at all.
 _UPDATER_PS1 = """param(
     [int]$ProcPid,
-    [string]$ZipPath,
+    [string]$StagingDir,
     [string]$DestDir,
     [string]$ExePath,
     [string]$LogPath
@@ -110,33 +117,33 @@ try {
     # Grace period after the process disappears, before touching its files.
     Start-Sleep -Seconds 2
 
-    Log "Extracting $ZipPath to $DestDir"
-    $extracted = $false
+    Log "Copying already-validated update from $StagingDir to $DestDir"
+    $copied = $false
     for ($i = 1; $i -le 10; $i++) {
         try {
-            Expand-Archive -LiteralPath $ZipPath -DestinationPath $DestDir -Force -ErrorAction Stop
-            $extracted = $true
+            Copy-Item -Path (Join-Path $StagingDir '*') -Destination $DestDir -Recurse -Force -ErrorAction Stop
+            $copied = $true
             break
         } catch {
-            Log "Extract attempt $i/10 failed: $($_.Exception.Message)"
+            Log "Copy attempt $i/10 failed: $($_.Exception.Message)"
             Start-Sleep -Seconds 2
         }
     }
 
-    if (-not $extracted) {
-        Log "FAILED: could not extract update after 10 attempts - old install left in place"
+    if (-not $copied) {
+        Log "FAILED: could not copy update after 10 attempts - old install left in place"
         exit 1
     }
 
     if (-not (Test-Path -LiteralPath $ExePath)) {
-        Log "FAILED: $ExePath not found after extraction"
+        Log "FAILED: $ExePath not found after copy"
         exit 1
     }
 
-    Log "Extraction OK, relaunching $ExePath"
+    Log "Copy OK, relaunching $ExePath"
     Start-Process -FilePath $ExePath
     Log "Update complete"
-    Remove-Item -LiteralPath $ZipPath -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $StagingDir -Recurse -Force -ErrorAction SilentlyContinue
     Remove-Item -LiteralPath $LogPath -Force -ErrorAction SilentlyContinue
 } catch {
     Log "FAILED: unexpected error: $($_.Exception.Message)"
@@ -208,9 +215,12 @@ def check_update_success():
 
 
 def apply_update(download_url):
-    """Downloads the release zip, validates it, then launches a detached updater
-    script and returns - the caller is expected to exit right after so the updater
-    can safely overwrite this process's own files. Only meaningful for the packaged
+    """Downloads the release zip, extracts and validates it into a staging
+    directory (still running - real failures here become a normal "Update
+    failed" the user sees immediately, not a mystery after quitting), then
+    launches a detached updater script and returns - the caller is expected to
+    exit right after so the updater can safely move that already-proven-good
+    content over this process's own files. Only meaningful for the packaged
     .exe (a fixed install directory to overwrite); raises if called from source."""
     if not getattr(sys, "frozen", False):
         raise RuntimeError("Self-update only applies to the packaged .exe - use `git pull` for a source install.")
@@ -221,6 +231,7 @@ def apply_update(download_url):
 
     tmp_dir = Path(tempfile.gettempdir())
     zip_path = tmp_dir / "mcpersist_update.zip"
+    staging_dir = tmp_dir / "mcpersist_update_staging"
     log_path = update_log_path()
     log_path.unlink(missing_ok=True)  # clear any already-surfaced leftover from a prior attempt
 
@@ -230,8 +241,17 @@ def apply_update(download_url):
         for chunk in resp.iter_content(chunk_size=1 << 16):
             f.write(chunk)
 
+    if staging_dir.exists():
+        shutil.rmtree(staging_dir)  # leftover from an earlier failed/interrupted attempt
+    staging_dir.mkdir(parents=True)
     with zipfile.ZipFile(zip_path) as zf:
-        _validate_zip_entries(zf, BASE_DIR)
+        _validate_zip_entries(zf, staging_dir)
+        zf.extractall(staging_dir)
+    zip_path.unlink(missing_ok=True)
+
+    if not (staging_dir / "MCPersist.exe").exists():
+        shutil.rmtree(staging_dir, ignore_errors=True)
+        raise RuntimeError("the downloaded update doesn't contain MCPersist.exe - not applying it")
 
     exe_path = str(BASE_DIR / "MCPersist.exe")
     updater_script = tmp_dir / "mcpersist_updater.ps1"
@@ -247,8 +267,8 @@ def apply_update(download_url):
             str(updater_script),
             "-ProcPid",
             str(os.getpid()),
-            "-ZipPath",
-            str(zip_path),
+            "-StagingDir",
+            str(staging_dir),
             "-DestDir",
             str(BASE_DIR),
             "-ExePath",

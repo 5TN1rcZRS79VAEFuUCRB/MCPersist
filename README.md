@@ -140,7 +140,7 @@ your own on a VPS you control. Point any MCPersist client at it with
 ```
 mcpersist/
   cli.py               the `run.bat ...` command-line interface
-  tray_app.py           the GUI's entry point (window + system tray icon)
+  tray_app.py           the GUI's entry point (main window)
   gui_pages.py           the GUI's screens (status, setup wizard)
   actions.py            start/stop/status logic - shared by the CLI and GUI
   setup_flow.py          setup/configure-relay logic - shared by the CLI and GUI

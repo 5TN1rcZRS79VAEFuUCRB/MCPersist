@@ -290,7 +290,7 @@ def cmd_tray(args):
         ),
         close_fds=True,
     )
-    print("Tray icon launched.")
+    print("MCPersist window launched.")
     return 0
 
 
@@ -340,7 +340,7 @@ def build_parser():
     p_autostart.add_argument("action", choices=["install", "remove", "status"])
     p_autostart.set_defaults(func=cmd_autostart)
 
-    sub.add_parser("tray", help="Launch the system tray icon (no console window)").set_defaults(func=cmd_tray)
+    sub.add_parser("tray", help="Launch the GUI window (no console window)").set_defaults(func=cmd_tray)
 
     return parser
 
