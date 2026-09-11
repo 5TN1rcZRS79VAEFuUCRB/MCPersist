@@ -139,17 +139,28 @@ def _gui_actually_running(pid):
     never gets cleaned up), Windows reusing that exact PID for any unrelated
     process would otherwise make a crashed instance look "still running" forever,
     permanently blocking relaunch with no indication of what actually happened.
-    Confirming the PID's own executable path matches this one closes that gap."""
+    Confirming the PID's own executable path matches this one closes most of that
+    gap - but not all of it: the tunnel client subprocess runs via that exact same
+    executable too (see main_gui.py's --tunnel-relay-run re-invocation, and
+    tunnel_relay.py's source-mode equivalent), so a recycled PID landing on a
+    tunnel subprocess instead of an unrelated program would pass the exe check
+    while still not actually being the GUI - confirmed by direct reproduction, not
+    just reasoning about it. Checking the command line for that subprocess's own
+    signature closes the rest of the gap."""
     if not process_manager.is_running(pid):
         return False
     try:
-        exe = psutil.Process(pid).exe()
+        proc = psutil.Process(pid)
+        exe = proc.exe()
+        cmdline = proc.cmdline()
     except psutil.Error:
         return False
     try:
-        return Path(exe).resolve() == Path(sys.executable).resolve()
+        if Path(exe).resolve() != Path(sys.executable).resolve():
+            return False
     except OSError:
         return False
+    return not any("tunnel_relay_run" in arg or arg == "--tunnel-relay-run" for arg in cmdline)
 
 
 def main():
