@@ -26,6 +26,109 @@ COLORS = {
     "unknown": QColor(149, 165, 166),
 }
 
+# Without this the app is just raw, unstyled default Qt widgets on whatever the
+# OS theme happens to be - flat, cramped, no visual hierarchy. This gives every
+# window a consistent look and marks the "move forward" button in each screen
+# (objectName "primaryButton") so the intended next action stands out from
+# secondary ones like Browse/Cancel.
+APP_STYLESHEET = """
+QWidget {
+    background-color: #1e1f22;
+    color: #e6e6e6;
+    font-size: 13px;
+}
+QGroupBox {
+    border: 1px solid #3a3b3f;
+    border-radius: 6px;
+    margin-top: 14px;
+    padding: 14px 10px 10px 10px;
+    font-weight: bold;
+}
+QGroupBox::title {
+    subcontrol-origin: margin;
+    subcontrol-position: top left;
+    left: 8px;
+    padding: 0 4px;
+    color: #cfd2d6;
+}
+QLineEdit, QComboBox, QTextEdit, QSpinBox {
+    background-color: #28292d;
+    border: 1px solid #3a3b3f;
+    border-radius: 4px;
+    padding: 5px 7px;
+    selection-background-color: #4CAF50;
+}
+QLineEdit:focus, QComboBox:focus, QTextEdit:focus, QSpinBox:focus {
+    border: 1px solid #4CAF50;
+}
+QComboBox::drop-down {
+    border: none;
+    width: 22px;
+}
+QPushButton {
+    background-color: #34363b;
+    border: 1px solid #46484d;
+    border-radius: 5px;
+    padding: 7px 14px;
+}
+QPushButton:hover {
+    background-color: #3b3e43;
+    border: 1px solid #57595e;
+}
+QPushButton:pressed {
+    background-color: #2a2c30;
+}
+QPushButton:disabled {
+    color: #6b6d72;
+    background-color: #28292d;
+}
+QPushButton#primaryButton {
+    background-color: #3f8f49;
+    border: 1px solid #4CAF50;
+    color: white;
+    font-weight: bold;
+}
+QPushButton#primaryButton:hover {
+    background-color: #4CAF50;
+}
+QPushButton#primaryButton:pressed {
+    background-color: #357a3d;
+}
+QRadioButton, QCheckBox {
+    spacing: 7px;
+    background: transparent;
+}
+QRadioButton::indicator, QCheckBox::indicator {
+    width: 14px;
+    height: 14px;
+}
+QRadioButton::indicator {
+    border-radius: 8px;
+    border: 2px solid #5a5c61;
+    background: transparent;
+}
+QRadioButton::indicator:checked {
+    border: 2px solid #4CAF50;
+    background-color: #4CAF50;
+}
+QRadioButton::indicator:hover {
+    border: 2px solid #4CAF50;
+}
+QScrollBar:vertical {
+    background: #1e1f22;
+    width: 10px;
+    margin: 0;
+}
+QScrollBar::handle:vertical {
+    background: #3a3b3f;
+    border-radius: 5px;
+    min-height: 20px;
+}
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+    height: 0;
+}
+"""
+
 
 def make_icon(color):
     pixmap = QPixmap(32, 32)
@@ -56,6 +159,23 @@ def status_color(status):
     return COLORS["stopped"]
 
 
+class SizedStackedWidget(QStackedWidget):
+    """A QStackedWidget sizes itself to fit the LARGEST page it holds, by
+    design - every other page then carries that page's dead space too. Since
+    the status page and the setup wizard have very different natural heights,
+    that made every page as tall as whichever one needed the most room.
+    Overriding these two hints to reflect only the current page is what lets
+    MainWindow.fit_to_current_page actually shrink the window back down."""
+
+    def sizeHint(self):
+        current = self.currentWidget()
+        return current.sizeHint() if current else super().sizeHint()
+
+    def minimumSizeHint(self):
+        current = self.currentWidget()
+        return current.minimumSizeHint() if current else super().minimumSizeHint()
+
+
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -69,7 +189,7 @@ class MainWindow(QMainWindow):
         self.setMaximumWidth(700)
         self._really_quit = False
 
-        self.stack = QStackedWidget()
+        self.stack = SizedStackedWidget()
         self.setCentralWidget(self.stack)
 
         self.status_page = StatusPage()
@@ -105,10 +225,32 @@ class MainWindow(QMainWindow):
     def open_setup(self):
         self.setup_page.reset()
         self.stack.setCurrentWidget(self.setup_page)
+        self.fit_to_current_page()
 
     def back_to_status(self):
         self.stack.setCurrentWidget(self.status_page)
         self.status_page.refresh()
+        self.fit_to_current_page()
+
+    def fit_to_current_page(self):
+        # The window was given a one-time size in __init__, and Qt never
+        # shrinks a manually-resized window back down on its own - so whichever
+        # page needed the most room (usually the setup wizard's) would leave
+        # every shorter page (the status view, or an early wizard step) with a
+        # big dead strip of empty space below its last widget. Re-measuring the
+        # currently-visible page's actual content each time it's shown fixes
+        # that. Deferred one tick so the layout has settled after the widgets
+        # this page just showed/hid actually take effect.
+        page = self.stack.currentWidget()
+        if page is None:
+            return
+
+        def resize_to_fit():
+            self.stack.updateGeometry()
+            target_height = max(300, min(780, page.sizeHint().height() + 24))
+            self.resize(self.width(), target_height)
+
+        QTimer.singleShot(0, resize_to_fit)
 
     def update_tray(self):
         st = current_status()
@@ -160,6 +302,7 @@ def main():
 
     app = QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(False)
+    app.setStyleSheet(APP_STYLESHEET)
     app.aboutToQuit.connect(lambda: GUI_PID_PATH.unlink(missing_ok=True))
     window = MainWindow()
     window.show()

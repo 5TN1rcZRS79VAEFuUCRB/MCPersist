@@ -115,6 +115,7 @@ class StatusPage(QWidget):
         btn_row = QHBoxLayout()
         btn_row.setSpacing(8)
         self.start_btn = QPushButton("Start")
+        self.start_btn.setObjectName("primaryButton")
         self.stop_btn = QPushButton("Stop")
         self.restart_btn = QPushButton("Restart")
         self.start_btn.clicked.connect(self.on_start)
@@ -563,8 +564,9 @@ class SetupPage(QWidget):
         layout.addWidget(title)
 
         # Step 1
-        self.step1_box = QGroupBox("1. Find worlds")
+        self.step1_box = QGroupBox("1. Get Started")
         step1_layout = QVBoxLayout(self.step1_box)
+        step1_layout.setSpacing(10)
 
         self.detected_instances_box = QWidget()
         detected_layout = QVBoxLayout(self.detected_instances_box)
@@ -590,7 +592,11 @@ class SetupPage(QWidget):
         # a new world doesn't need a world list at all (it only needs the instance
         # dir itself, for loader detection/mod copying), so gating it behind that
         # button/label made no more sense than the old "Switch" gating did.
+        mode_label = QLabel("What do you want to do?")
+        mode_label.setStyleSheet("color: #888;")
+        step1_layout.addWidget(mode_label)
         mode_row = QHBoxLayout()
+        mode_row.setSpacing(16)
         self.mode_existing_radio = QRadioButton("Select Existing World")
         self.mode_new_radio = QRadioButton("Generate New World")
         self.mode_existing_radio.setChecked(True)
@@ -603,23 +609,25 @@ class SetupPage(QWidget):
         step1_layout.addLayout(mode_row)
 
         self.find_or_continue_btn = QPushButton("Find Worlds")
+        self.find_or_continue_btn.setObjectName("primaryButton")
         self.find_or_continue_btn.clicked.connect(self.on_proceed_from_step1)
         step1_layout.addWidget(self.find_or_continue_btn)
         self.step1_msg = QLabel("")
         self.step1_msg.setWordWrap(True)
         step1_layout.addWidget(self.step1_msg)
 
+        layout.addWidget(self.step1_box)
+
         # A previously set-up server needs no Minecraft instance at all to switch
         # to - it was already fully set up the first time around. This used to be
         # a third option buried behind picking an instance and clicking Find
         # Worlds first, which made no sense for a mode that doesn't touch either -
         # it's a fully independent path now, available the moment the wizard
-        # opens, not gated behind the existing/new-world flow above at all.
-        self.switch_section = QWidget()
+        # opens, not gated behind the existing/new-world flow above at all. A real
+        # peer QGroupBox instead of a "— or —" divider stuffed inside step 1's
+        # box, so it actually reads as the separate, simpler path it is.
+        self.switch_section = QGroupBox("Switch to a Previous Server")
         switch_section_layout = QVBoxLayout(self.switch_section)
-        switch_section_layout.setContentsMargins(0, 0, 0, 0)
-        switch_section_layout.addWidget(QLabel("— or —"))
-        switch_section_layout.addWidget(QLabel("Switch to a previously set-up server"))
         self.switch_world_combo = QComboBox()
         switch_section_layout.addWidget(self.switch_world_combo)
         self.switch_world_msg = QLabel("Switches immediately - no download or setup needed.")
@@ -627,12 +635,11 @@ class SetupPage(QWidget):
         self.switch_world_msg.setStyleSheet("color: #888;")
         switch_section_layout.addWidget(self.switch_world_msg)
         switch_btn = QPushButton("Switch")
+        switch_btn.setObjectName("primaryButton")
         switch_btn.clicked.connect(self.on_switch_to_server)
         switch_section_layout.addWidget(switch_btn)
-        step1_layout.addWidget(self.switch_section)
+        layout.addWidget(self.switch_section)
         self.switch_section.setVisible(False)
-
-        layout.addWidget(self.step1_box)
 
         # Step 2 - just shows whichever content step 1's mode choice calls for; it
         # doesn't offer its own mode choice anymore (that already happened above).
@@ -679,6 +686,7 @@ class SetupPage(QWidget):
         self.loader_warning.setStyleSheet("color: #b45309;")
         step2_layout.addWidget(self.loader_warning)
         self.continue_btn = QPushButton("Continue")
+        self.continue_btn.setObjectName("primaryButton")
         self.continue_btn.clicked.connect(self.on_prepare_world)
         step2_layout.addWidget(self.continue_btn)
         self.step2_box.setVisible(False)
@@ -692,6 +700,7 @@ class SetupPage(QWidget):
         self.prepare_msg.setFixedHeight(160)
         step3_layout.addWidget(self.prepare_msg)
         self.finish_btn = QPushButton("Finish Setup")
+        self.finish_btn.setObjectName("primaryButton")
         self.finish_btn.clicked.connect(self.on_finish_setup)
         step3_layout.addWidget(self.finish_btn)
         self.step3_box.setVisible(False)
@@ -705,6 +714,7 @@ class SetupPage(QWidget):
         self.finish_msg.setFixedHeight(120)
         step4_layout.addWidget(self.finish_msg)
         done_btn = QPushButton("Done")
+        done_btn.setObjectName("primaryButton")
         done_btn.clicked.connect(self.done.emit)
         step4_layout.addWidget(done_btn)
         self.step4_box.setVisible(False)
@@ -714,6 +724,17 @@ class SetupPage(QWidget):
         cancel_btn.clicked.connect(self.cancelled.emit)
         layout.addWidget(cancel_btn)
         layout.addStretch()
+
+    def _resize_window_to_fit(self):
+        # Each step shows/hides a different set of boxes, so the window's ideal
+        # height changes as the wizard progresses - MainWindow.fit_to_current_page
+        # re-measures whichever page is current, but that only runs when the
+        # stack itself switches pages, not on these in-page step transitions, so
+        # it has to be poked here too. Guarded since this page can also be driven
+        # standalone (outside a real MainWindow) during testing.
+        window = self.window()
+        if hasattr(window, "fit_to_current_page"):
+            window.fit_to_current_page()
 
     def reset(self):
         instances = setup_flow.find_instances()
@@ -746,6 +767,7 @@ class SetupPage(QWidget):
         self.step2_box.setVisible(False)
         self.step3_box.setVisible(False)
         self.step4_box.setVisible(False)
+        self._resize_window_to_fit()
 
     def on_detected_instance_selected(self, index):
         path = self.detected_instances_combo.itemData(index)
@@ -781,7 +803,9 @@ class SetupPage(QWidget):
             self.step1_msg.setText("")
             self.on_mode_changed()
             self.step1_box.setVisible(False)
+            self.switch_section.setVisible(False)
             self.step2_box.setVisible(True)
+            self._resize_window_to_fit()
             return
 
         worlds = result.data["worlds"]
@@ -796,7 +820,9 @@ class SetupPage(QWidget):
         self.world_combo.addItems(worlds)
         self.on_mode_changed()
         self.step1_box.setVisible(False)
+        self.switch_section.setVisible(False)
         self.step2_box.setVisible(True)
+        self._resize_window_to_fit()
 
     def on_mode_changed(self):
         is_existing = self.mode_existing_radio.isChecked()
@@ -886,7 +912,9 @@ class SetupPage(QWidget):
         if not world_name:
             return
         self.step1_box.setVisible(False)
+        self.switch_section.setVisible(False)
         self.step4_box.setVisible(True)
+        self._resize_window_to_fit()
         self.finish_msg.setText("Switching...")
         self._worker = Worker(setup_flow.switch_to_world, world_name)
         self._worker.finished_result.connect(self._on_switch_done)
@@ -921,6 +949,7 @@ class SetupPage(QWidget):
 
         self.step2_box.setVisible(False)
         self.step3_box.setVisible(True)
+        self._resize_window_to_fit()
         self.prepare_msg.setText("Preparing...")
         self.finish_btn.setEnabled(False)
 
@@ -972,5 +1001,6 @@ class SetupPage(QWidget):
         self.finish_msg.setText("\n".join(result.lines))
         self.step3_box.setVisible(False)
         self.step4_box.setVisible(True)
+        self._resize_window_to_fit()
 
 
