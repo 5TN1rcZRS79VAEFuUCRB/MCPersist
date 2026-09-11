@@ -3,7 +3,7 @@ to actions.py/setup_flow.py, same as the CLI."""
 
 import subprocess
 
-from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtCore import Qt, QSize, QTimer, Signal
 from PySide6.QtWidgets import (
     QButtonGroup,
     QCheckBox,
@@ -44,6 +44,18 @@ class StatusPage(QWidget):
         # window to fit real content when it's short enough to (capping it at 780
         # regardless, with the scroll area handling whatever doesn't fit past that).
         return self._content.sizeHint()
+
+    def minimumSizeHint(self):
+        # A plain QScrollArea's own minimumSizeHint doesn't reflect its child
+        # widget's minimum size (it's a small, generic default) - without this
+        # override, MainWindow could be dragged narrower than the World/Memory/
+        # Performance button rows actually need, cramming or clipping them
+        # horizontally, undoing the width fix from a prior round. Deliberately
+        # keeps the height low (not the content's full minimum height) - forcing
+        # that back up would defeat the entire point of the QScrollArea, which
+        # exists specifically so the window CAN be shorter than its content, with
+        # a scrollbar for the rest, instead of being forced tall or clipped.
+        return QSize(self._content.minimumSizeHint().width(), 200)
 
     def __init__(self):
         super().__init__()
@@ -191,9 +203,9 @@ class StatusPage(QWidget):
         # world folder is fully self-contained, so this is just a folder copy;
         # "Switch to a Previously Set-Up Server" (in the setup wizard) is what
         # actually makes an imported one active.
-        recover_btn = QPushButton("Recover Worlds from Old Install...")
-        recover_btn.clicked.connect(self.on_recover_from_old_install)
-        world_layout.addWidget(recover_btn)
+        self.recover_btn = QPushButton("Recover Worlds from Old Install...")
+        self.recover_btn.clicked.connect(self.on_recover_from_old_install)
+        world_layout.addWidget(self.recover_btn)
 
         folder_row = QHBoxLayout()
         open_world_btn = QPushButton("Server Folder")
@@ -520,11 +532,20 @@ class StatusPage(QWidget):
             return
         self.action_msg.setStyleSheet("color: #888;")
         self.action_msg.setText("Looking for worlds to recover...")
+        # Every other worker-launching action (Start/Stop/Restart, Finish Setup)
+        # disables its triggering control for the run's duration - this one didn't,
+        # so clicking it again mid-scan/copy would overwrite self._recover_worker
+        # with a new Worker before the first one (a QThread with no Qt parent) had
+        # finished, dropping the only reference still keeping it alive - the same
+        # hazard process_manager.py's _detached_procs list exists to avoid for
+        # Popen objects, just for a QThread instead.
+        self.recover_btn.setEnabled(False)
         self._recover_worker = Worker(setup_flow.import_worlds_from, folder)
         self._recover_worker.finished_result.connect(self._on_recover_done)
         self._recover_worker.start()
 
     def _on_recover_done(self, result):
+        self.recover_btn.setEnabled(True)
         if isinstance(result, WorkerError):
             self.action_msg.setStyleSheet("color: #e74c3c;")
             self.action_msg.setText(f"Recovery failed: {result.message}")

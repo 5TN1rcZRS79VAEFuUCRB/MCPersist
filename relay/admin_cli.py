@@ -7,18 +7,53 @@ import secrets
 import time
 from pathlib import Path
 
+from auto_assignments import load_assignments, save_assignments
 from users import add_user, load_users, remove_user
 
 STATUS_PATH = Path(__file__).resolve().parent / "relay_status.json"
 
 
 def cmd_add(args):
+    # Auto (unreserved) clients get a persistent subdomain tied to their source IP
+    # that never expires on its own (see relay_server.get_or_assign_subdomain) -
+    # without this check, reserving that same name here would silently create two
+    # registrations racing for one subdomain: whichever one is currently connected
+    # wins, and the other gets rejected with "already connected elsewhere" forever
+    # (the auto client reconnects with backoff indefinitely), with no way to tell
+    # from `add-user`'s own output that this happened.
+    assignments = load_assignments()
+    auto_owner_ip = next((ip for ip, sub in assignments.items() if sub == args.subdomain), None)
+    if auto_owner_ip:
+        print(
+            f"Refusing: {args.subdomain!r} is currently auto-assigned to IP {auto_owner_ip!r} "
+            f"(see auto_assignments.json). Reserving it here too would leave two registrations "
+            "fighting over the same name. Free it first with:\n"
+            f"  python3 admin_cli.py release-auto-assignment {args.subdomain}\n"
+            "then re-run this - only do that once you're sure the person behind that IP is fine "
+            "getting a new random name next time they connect."
+        )
+        return
     token = secrets.token_urlsafe(24)
     add_user(args.subdomain, token)
     print(f"Added {args.subdomain!r}")
     print(f"  subdomain: {args.subdomain}")
     print(f"  token:     {token}")
     print("Give these to the user for their `run.bat configure-relay` step.")
+
+
+def cmd_release_auto(args):
+    assignments = load_assignments()
+    owner_ip = next((ip for ip, sub in assignments.items() if sub == args.subdomain), None)
+    if owner_ip is None:
+        print(f"{args.subdomain!r} isn't currently auto-assigned to anyone - nothing to release.")
+        return
+    del assignments[owner_ip]
+    save_assignments(assignments)
+    print(
+        f"Released {args.subdomain!r} (was auto-assigned to {owner_ip!r}). If that IP has a live "
+        "connection under this name right now, it keeps it until that connection actually drops - "
+        "this only clears the reservation for its *next* connection, which will get a fresh random name."
+    )
 
 
 def cmd_remove(args):
@@ -83,6 +118,13 @@ def main():
     p_remove = sub.add_parser("remove-user")
     p_remove.add_argument("subdomain")
     p_remove.set_defaults(func=cmd_remove)
+
+    p_release = sub.add_parser(
+        "release-auto-assignment",
+        help="Clear an auto-assigned (unreserved) subdomain so it can be reserved with add-user",
+    )
+    p_release.add_argument("subdomain")
+    p_release.set_defaults(func=cmd_release_auto)
 
     sub.add_parser("list-users").set_defaults(func=cmd_list)
     sub.add_parser("status", help="Show live connection status (who's connected right now)").set_defaults(

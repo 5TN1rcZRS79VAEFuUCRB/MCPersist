@@ -21,6 +21,16 @@ ASSIGNED_ADDRESS_PATH = Path("assigned_address.txt")
 # backoff" behavior this module's docstring promises.
 CONNECT_TIMEOUT = 15
 
+# Bounds pipe()'s per-player read/drain the same way the relay's own pipe() was
+# hardened in a prior round (relay_server.PIPE_IDLE_TIMEOUT) - without it, a
+# network partition or firewall drop between here and the relay's data port (or a
+# genuinely hung local Minecraft server) leaves one direction blocked on read()
+# forever with no FIN ever arriving, and since handle_connect spawns a fresh task
+# and socket pair per incoming player, repeated stalls over a long-running
+# server's lifetime accumulate unbounded leaked tasks/sockets with nothing to
+# ever clean them up.
+PIPE_IDLE_TIMEOUT = 300
+
 # The control/data channels carry per-user tokens and now require TLS on the relay
 # side (see relay/relay_server.py) - the default system CA bundle is enough to
 # verify a real Let's Encrypt cert, same as any normal HTTPS client. The local
@@ -44,12 +54,14 @@ def _get_tls_context():
 async def pipe(reader, writer):
     try:
         while True:
-            chunk = await reader.read(65536)
+            chunk = await asyncio.wait_for(reader.read(65536), timeout=PIPE_IDLE_TIMEOUT)
             if not chunk:
                 break
             writer.write(chunk)
-            await writer.drain()
-    except (ConnectionResetError, BrokenPipeError):
+            await asyncio.wait_for(writer.drain(), timeout=PIPE_IDLE_TIMEOUT)
+    except (OSError, asyncio.TimeoutError):
+        # OSError covers ConnectionResetError/BrokenPipeError/ssl.SSLError (all
+        # subclasses) in one catch, same as relay_server.py's hardened pipe().
         pass
     finally:
         writer.close()

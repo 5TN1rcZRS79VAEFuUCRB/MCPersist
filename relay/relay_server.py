@@ -244,6 +244,13 @@ async def _ping_loop(writer, subdomain, last_seen):
             try:
                 await send_json(writer, {"type": "ping"})
             except Exception:
+                # Same treatment as the stale-timeout branch above, not a silent
+                # exit - a failed/timed-out ping write (e.g. drain() backpressure)
+                # otherwise leaves this task gone for good with nothing left to
+                # ever detect this connection going dark later, quietly reopening
+                # the exact "subdomain permanently occupied by a connection
+                # nothing is using" bug PING_INTERVAL/PING_TIMEOUT exists to fix.
+                writer.close()
                 return
     except asyncio.CancelledError:
         pass
