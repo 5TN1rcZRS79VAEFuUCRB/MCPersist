@@ -9,6 +9,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 import zipfile
 from pathlib import Path
 from urllib.parse import urlparse
@@ -236,7 +237,7 @@ def apply_update(download_url):
     updater_script = tmp_dir / "mcpersist_updater.ps1"
     updater_script.write_text(_UPDATER_PS1, encoding="utf-8")
 
-    subprocess.Popen(
+    proc = subprocess.Popen(
         [
             "powershell",
             "-NoProfile",
@@ -263,10 +264,7 @@ def apply_update(download_url):
         # script even runs - never writes a log line, never touches a file, no error,
         # nothing - because PowerShell's own host initialization apparently doesn't
         # handle having zero console object gracefully. CREATE_NO_WINDOW instead gives
-        # it a real console that's just hidden, which starts up fine. This is almost
-        # certainly what the friend's "update just closed and never came back" report
-        # actually was: the app quits right after spawning this process, so a silently
-        # stalled updater looks identical to a closed app with nothing left running.
+        # it a real console that's just hidden, which starts up fine.
         # CREATE_BREAKAWAY_FROM_JOB is kept too - cheap insurance so this survives
         # independent of whatever job object (if any) its parent happens to be in,
         # matching the actual intent: outlive the parent unconditionally.
@@ -277,3 +275,28 @@ def apply_update(download_url):
         ),
         close_fds=True,
     )
+
+    # Popen succeeding only means Windows accepted the launch request - it says
+    # nothing about whether the script actually ran. A machine-level execution
+    # policy (Group Policy's MachinePolicy/UserPolicy scopes - which
+    # -ExecutionPolicy Bypass on the command line cannot override, unlike the
+    # process-level policy) or antivirus blocking an unsigned script makes
+    # PowerShell exit almost immediately, before it ever reaches the script's
+    # own try/catch and Log calls - so no log file gets written either.
+    # Without this check that failure was completely silent on both ends: the
+    # caller (_on_update_applied) already commits to quitting right after this
+    # returns, so the app just closes and never comes back, and the next
+    # launch's check_last_update_failure() finds nothing to report since no log
+    # was ever created. A brief liveness check turns that into a real, visible
+    # "Update failed" the user actually sees, instead of the app silently
+    # vanishing - which is almost certainly what a "the update doesn't work,
+    # it doesn't even restart itself" report actually was, on a machine where
+    # this specific block applies (confirmed the launch itself works correctly
+    # via a real end-to-end self-update on an unrestricted machine - this
+    # guards the case where it can't, not the common case).
+    time.sleep(1.5)
+    if proc.poll() is not None:
+        raise RuntimeError(
+            f"the updater process exited immediately (code {proc.returncode}) - PowerShell "
+            "script execution may be blocked by policy or antivirus on this machine"
+        )
