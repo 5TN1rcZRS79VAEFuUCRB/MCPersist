@@ -16,17 +16,71 @@ this scale - the relay itself barely uses any CPU/RAM, it's just forwarding byte
    (pick whatever subdomain root you like - this doc uses `tunnel.yourdomain.com`).
    Every user you add (`alice`, `bob`, ...) then automatically resolves, with no
    per-user DNS changes.
-2. The VPS's bare IP address is all `configure-relay` needs on the client side for
-   the control/data connections - no DNS required for that part.
+2. Also point a dedicated hostname at the same IP for the control/data channels
+   specifically - e.g. `relay.tunnel.yourdomain.com -> VPS_IP` (a plain A record, or
+   just let the wildcard above cover it if the name fits under it already). This is
+   what `configure-relay`'s `relay_host` needs now - a real hostname, not a bare IP,
+   since the control/data channels are TLS (see below) and certificate verification
+   needs a hostname to check the cert against.
+
+## TLS (required)
+
+The control/data channels carry per-user tokens and are open to the whole internet,
+so `relay_server.py` requires a real TLS certificate for them - it won't start
+without one. The public Minecraft port (`:25565`) is deliberately NOT wrapped in TLS -
+that's raw Minecraft protocol traffic to vanilla clients, which have no concept of
+TLS at the transport layer.
+
+```bash
+sudo apt-get install -y certbot
+# Needs port 80 reachable from the internet (see Firewall below) - certbot's own
+# standalone webserver answers the ACME HTTP-01 challenge on it, briefly, both now
+# and on every future renewal.
+sudo certbot certonly --standalone -d relay.tunnel.yourdomain.com \
+    --non-interactive --agree-tos -m you@example.com --no-eff-email
+```
+
+Certbot installs its own renewal timer automatically (`systemctl status certbot.timer`).
+The cert it issues lands in `/etc/letsencrypt/live/relay.tunnel.yourdomain.com/`,
+readable only by root - but `mcrelay.service` runs as the unprivileged `mcrelay` user
+(see Deploy below), so a renewal hook is needed to copy the fresh cert somewhere that
+user can actually read, every time it renews:
+
+```bash
+sudo tee /etc/letsencrypt/renewal-hooks/deploy/mcrelay-cert-sync.sh > /dev/null << 'EOF'
+#!/bin/bash
+set -e
+CERT_DIR=/opt/mcrelay/certs
+SRC_DIR=/etc/letsencrypt/live/relay.tunnel.yourdomain.com
+mkdir -p "$CERT_DIR"
+cp "$SRC_DIR/fullchain.pem" "$CERT_DIR/fullchain.pem"
+cp "$SRC_DIR/privkey.pem" "$CERT_DIR/privkey.pem"
+chown mcrelay:mcrelay "$CERT_DIR/fullchain.pem" "$CERT_DIR/privkey.pem"
+chmod 644 "$CERT_DIR/fullchain.pem"
+chmod 600 "$CERT_DIR/privkey.pem"
+systemctl restart mcrelay
+EOF
+sudo chmod +x /etc/letsencrypt/renewal-hooks/deploy/mcrelay-cert-sync.sh
+sudo /etc/letsencrypt/renewal-hooks/deploy/mcrelay-cert-sync.sh  # run once now for the initial copy
+```
+
+That last line's `systemctl restart mcrelay` means a few seconds of downtime every
+renewal (~60 days) - simpler and more robust than live in-process cert reloading, and
+fine for a relay at this scale. `relay_server.py` looks for the cert/key at
+`<relay dir>/certs/fullchain.pem` / `privkey.pem` by default (override with
+`--tls-cert`/`--tls-key` if you'd rather point it elsewhere).
 
 ## Firewall
 
 Allow inbound TCP on:
 - `25565` - the public Minecraft port, open to everyone (this is what players connect to).
 - `7000` (control) and `7001` (data) - only MCPersist clients need these, but it's
-  simplest to just open them too. Access control for v1 is the per-user token plus
-  unguessable per-connection UUIDs, not network-level restriction - fine for a small
-  trusted beta, not hardened for a large public service (no TLS yet either).
+  simplest to just open them too. Access control is TLS plus the per-user token plus
+  unguessable per-connection UUIDs - reasonable for a small trusted beta, not hardened
+  for a large public service.
+- `80` - only needed for certbot's ACME HTTP-01 challenge, but needed *permanently*,
+  not just once - certbot repeats this same challenge on every renewal (~every 60
+  days), so closing it after the first certificate would break future renewals.
 
 `relay_server.py` also caps concurrent raw connections per source IP
 (`MAX_CONNECTIONS_PER_IP`) and simultaneous in-flight join attempts against any one
@@ -36,7 +90,7 @@ never gets close to either limit. A separate rolling-window rate limiter
 (`CONN_RATE_LIMIT`, 30 attempts/minute per source IP by default) catches a different
 pattern neither cap does on its own: rapid connect/disconnect cycling, where each
 individual connection is too brief to ever build up against the concurrency caps.
-Still no TLS and still no per-user bandwidth caps.
+Still no per-user bandwidth caps.
 
 ## Deploy
 
@@ -53,6 +107,9 @@ sudo systemctl enable --now mcrelay
 sudo systemctl status mcrelay
 ```
 
+Set up TLS (above) before this will actually start - `relay_server.py` refuses to run
+without a cert.
+
 `users.json` (reserved subdomains) and `auto_assignments.json` (auto-registered ones,
 persisted per source IP) get created next to `admin_cli.py`/`relay_server.py`. Back
 them up if you care about not re-issuing tokens or losing auto-assigned addresses.
@@ -64,9 +121,10 @@ cd /opt/mcrelay
 python3 admin_cli.py add-user alice
 ```
 
-Prints a subdomain + token - send both to that person. They run `run.bat
-configure-relay` on their MCPersist install and paste them in, along with your VPS's
-IP and the ports above.
+Prints a subdomain + token - send both to that person, along with the relay's
+hostname (`relay_host` - `relay.tunnel.yourdomain.com` in this doc's example, not the
+bare IP) and the ports above. They run `run.bat configure-relay` on their MCPersist
+install and paste all of it in.
 
 `remove-user <subdomain>` and `list-users` are also available.
 

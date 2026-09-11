@@ -4,6 +4,7 @@ the local Minecraft server. Reconnects with backoff if the relay connection drop
 
 import asyncio
 import json
+import ssl
 from pathlib import Path
 
 from . import config
@@ -11,6 +12,13 @@ from . import config
 RECONNECT_DELAY = 5
 LOCAL_PORT = 25565
 ASSIGNED_ADDRESS_PATH = Path("assigned_address.txt")
+
+# The control/data channels carry per-user tokens and now require TLS on the relay
+# side (see relay/relay_server.py) - the default system CA bundle is enough to
+# verify a real Let's Encrypt cert, same as any normal HTTPS client. The local
+# connection to the Minecraft server itself (127.0.0.1) is never wrapped - that's
+# plain loopback traffic to a process on this same machine, nothing to encrypt.
+_TLS_CONTEXT = ssl.create_default_context()
 
 
 async def pipe(reader, writer):
@@ -29,7 +37,9 @@ async def pipe(reader, writer):
 
 async def handle_connect(relay_host, data_port, conn_id):
     try:
-        data_reader, data_writer = await asyncio.open_connection(relay_host, data_port)
+        data_reader, data_writer = await asyncio.open_connection(
+            relay_host, data_port, ssl=_TLS_CONTEXT, server_hostname=relay_host
+        )
         data_writer.write((json.dumps({"type": "data_hello", "id": conn_id}) + "\n").encode("utf-8"))
         await data_writer.drain()
 
@@ -52,7 +62,9 @@ async def run_once(cfg):
     token = cfg.get("relay_token")
     public_domain = cfg.get("public_domain")
 
-    reader, writer = await asyncio.open_connection(relay_host, control_port)
+    reader, writer = await asyncio.open_connection(
+        relay_host, control_port, ssl=_TLS_CONTEXT, server_hostname=relay_host
+    )
     register_msg = {"type": "register"}
     if subdomain and token:
         register_msg["subdomain"] = subdomain

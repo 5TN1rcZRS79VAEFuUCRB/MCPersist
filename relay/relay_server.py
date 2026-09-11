@@ -8,6 +8,7 @@ import asyncio
 import json
 import os
 import random
+import ssl
 import time
 import uuid
 from pathlib import Path
@@ -438,20 +439,47 @@ async def _background_loop(start_time):
                 del conn_attempts[ip]
 
 
+DEFAULT_TLS_CERT = Path(__file__).resolve().parent / "certs" / "fullchain.pem"
+DEFAULT_TLS_KEY = Path(__file__).resolve().parent / "certs" / "privkey.pem"
+
+
+def _build_tls_context(cert_path, key_path):
+    """The control/data channels carry per-user tokens and are open to the whole
+    internet with no other transport security - TLS here is mandatory, not
+    optional, matching that this project moved to a real cert rather than adding
+    an opt-in flag that would leave the plaintext gap open by default. The public
+    Minecraft port (:25565) deliberately does NOT get wrapped here - that's raw
+    Minecraft protocol traffic to vanilla clients, which have no concept of TLS at
+    the transport layer and would simply fail to connect at all if it were."""
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    context.load_cert_chain(certfile=str(cert_path), keyfile=str(key_path))
+    return context
+
+
 async def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--bind", default="0.0.0.0")
     parser.add_argument("--control-port", type=int, default=7000)
     parser.add_argument("--data-port", type=int, default=7001)
     parser.add_argument("--public-port", type=int, default=25565)
+    parser.add_argument("--tls-cert", default=str(DEFAULT_TLS_CERT))
+    parser.add_argument("--tls-key", default=str(DEFAULT_TLS_KEY))
     args = parser.parse_args()
 
-    control_server = await asyncio.start_server(handle_control, args.bind, args.control_port)
-    data_server = await asyncio.start_server(handle_data, args.bind, args.data_port)
+    if not Path(args.tls_cert).exists() or not Path(args.tls_key).exists():
+        raise SystemExit(
+            f"TLS cert/key not found ({args.tls_cert}, {args.tls_key}) - the control/data channels require TLS "
+            "and won't start without it. See relay/README.md for provisioning a certificate."
+        )
+    tls_context = _build_tls_context(args.tls_cert, args.tls_key)
+
+    control_server = await asyncio.start_server(handle_control, args.bind, args.control_port, ssl=tls_context)
+    data_server = await asyncio.start_server(handle_data, args.bind, args.data_port, ssl=tls_context)
     public_server = await asyncio.start_server(handle_public, args.bind, args.public_port)
 
     print(
-        f"relay listening: control :{args.control_port}  data :{args.data_port}  public :{args.public_port}",
+        f"relay listening: control :{args.control_port} (TLS)  data :{args.data_port} (TLS)  "
+        f"public :{args.public_port} (plain)",
         flush=True,
     )
 

@@ -135,9 +135,9 @@ your own on a VPS you control. Point any MCPersist client at it with
   the whole server the moment a player joins if left in. You don't need it anyway;
   MCPersist replaces what it does.
 - The default relay is open to anyone running this tool (auto-registration, no token
-  needed) - the only abuse control is a per-IP connection cap. No bandwidth limits or
-  TLS on the control/data channels yet. Fine at small scale; revisit if a given relay
-  gets real traffic. See `relay/README.md`.
+  needed) - abuse controls are per-IP connection/rate caps plus TLS on the control/data
+  channels. No per-user bandwidth limits yet. Fine at small scale; revisit if a given
+  relay gets real traffic. See `relay/README.md`.
 - No world backups. If the PC or the world save is lost, it's gone - worth setting up
   your own backup of `servers/<world>/world` if that matters to you.
 

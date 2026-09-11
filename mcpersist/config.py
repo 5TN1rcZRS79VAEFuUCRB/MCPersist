@@ -23,7 +23,10 @@ DEFAULTS = {
     "rcon_port": 25575,
     "rcon_password": None,
     "join_address": None,
-    "relay_host": "5.161.120.124",
+    # A real hostname, not a bare IP - the control/data channels are TLS now (see
+    # relay/relay_server.py), and TLS certificate verification needs a hostname to
+    # check the cert against (SNI), which a bare IP can't provide.
+    "relay_host": "relay.mcpersist.com",
     "relay_control_port": 7000,
     "relay_data_port": 7001,
     "subdomain": None,
