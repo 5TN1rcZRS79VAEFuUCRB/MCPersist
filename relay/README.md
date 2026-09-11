@@ -28,6 +28,12 @@ Allow inbound TCP on:
   unguessable per-connection UUIDs, not network-level restriction - fine for a small
   trusted beta, not hardened for a large public service (no TLS yet either).
 
+`relay_server.py` also caps concurrent raw connections per source IP
+(`MAX_CONNECTIONS_PER_IP`) and simultaneous in-flight join attempts against any one
+backend (`MAX_PENDING_PER_SUBDOMAIN`), so a single source can't flood the relay or
+hammer one person's tunnel client with fake connection attempts - real multiplayer use
+never gets close to either limit. Still no TLS and still no per-user bandwidth caps.
+
 ## Deploy
 
 ```bash

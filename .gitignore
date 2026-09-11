@@ -2,6 +2,10 @@
 config.json
 relay/users.json
 relay/auto_assignments.json
+# The atomic write-then-rename pattern used by all three of the above leaves a
+# same-named *.tmp file holding the exact same secrets until the rename completes -
+# covered here too, not just the final filenames.
+*.json.tmp
 
 # Runtime data - world saves, downloaded server jars, logs
 servers/

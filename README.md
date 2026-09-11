@@ -12,7 +12,7 @@ comes back automatically after a reboot (as long as your PC is on).
 ## Quickstart
 
 1. Download `MCPersist-windows.zip` from [Releases](../../releases) and extract it.
-2. Run `MCPersist.exe` inside the extracted folder. Click **Set Up New World** -
+2. Run `MCPersist.exe` inside the extracted folder. Click **Set Up a Server** -
    instances from Prism/MultiMC/PolyMC/ATLauncher and the official launcher are
    detected automatically and offered as a pick-list; pick one, or point it at your
    instance folder yourself if yours isn't found. Then either select one of your existing
@@ -23,8 +23,14 @@ comes back automatically after a reboot (as long as your PC is on).
 3. Click **Start**. The join address shown is what you give your friends.
 
 Set up more than one world over time? Every server you've made stays around - open
-**Set Up New World** again and pick **Switch to a Previous Server** to jump between
-them instantly, without re-downloading anything.
+**Set Up a Server** again and pick **Switch to a Previously Set-Up Server** to jump
+between them instantly, without re-downloading anything.
+
+Lost access to an old install's worlds (e.g. after a manual reinstall)? The status
+screen's **Recover Worlds from Old Install...** button copies every world from an old
+MCPersist folder into this one - point it at the old install's folder (or its
+`servers` folder directly) and use **Switch to a Previously Set-Up Server** afterward
+to start using one.
 
 No Python install needed for this path - everything's bundled into the folder.
 
@@ -112,7 +118,7 @@ your own on a VPS you control. Point any MCPersist client at it with
 
 ## Known limitations
 
-- Windows + Fabric/vanilla only (no Forge/NeoForge yet - detected and flagged with a
+- Windows + Vanilla/Fabric/Forge (no NeoForge yet - detected and flagged with a
   clear warning if your world uses one, not silently mis-set-up).
 - The server only runs while your PC is on and awake.
 - Fabric mod support copies your client `mods/` folder as a starting point. Client-only
@@ -139,19 +145,24 @@ your own on a VPS you control. Point any MCPersist client at it with
 
 ```
 mcpersist/
+  __main__.py            lets `python -m mcpersist ...` work as the CLI entry point
   cli.py               the `run.bat ...` command-line interface
   tray_app.py           the GUI's entry point (main window)
   gui_pages.py           the GUI's screens (status, setup wizard)
+  gui_worker.py           a QThread helper for running slow calls without freezing the GUI
   actions.py            start/stop/status logic - shared by the CLI and GUI
   setup_flow.py          setup/configure-relay logic - shared by the CLI and GUI
   world.py               reads world saves: version/loader/owner detection
   server_vanilla.py     downloads a matching vanilla server jar
   server_fabric.py       downloads a matching Fabric server jar + mods
+  server_forge.py         downloads and runs Forge's own installer to produce a server
   java_manager.py         auto-downloads a matching portable Java (Temurin) if needed
+  javacheck.py            detects an installed Java's version
   mojang.py               UUID -> username lookups (for whitelist/op)
   tunnel_relay.py        launches the tunnel client as a detached process
   tunnel_relay_run.py     the tunnel client itself - talks to the relay
   process_manager.py     detached-process/PID-file management
+  paths.py                filesystem locations (config.json, servers/, bin/) - frozen-aware
   rcon.py                  minimal RCON client (graceful server stop, admin commands)
   config.py               config.json load/save, RAM/view-distance auto-sizing
   autostart.py            start-on-login (Task Scheduler or Startup-folder fallback)

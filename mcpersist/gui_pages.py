@@ -164,7 +164,7 @@ class StatusPage(QWidget):
         world_layout.addWidget(recover_btn)
 
         folder_row = QHBoxLayout()
-        open_world_btn = QPushButton("World Folder")
+        open_world_btn = QPushButton("Server Folder")
         open_world_btn.clicked.connect(self.open_world_folder)
         open_mods_btn = QPushButton("Mods Folder")
         open_mods_btn.clicked.connect(self.open_mods_folder)
@@ -747,6 +747,44 @@ class SetupPage(QWidget):
         new_layout.addWidget(QLabel("Your Minecraft username (required - the whitelist means nobody, including you, can join without it)"))
         self.owner_username_edit = QLineEdit()
         new_layout.addWidget(self.owner_username_edit)
+
+        # World generation options - only meaningful the first time a world is ever
+        # created (an already-generated existing world's terrain/seed can't
+        # retroactively change), so these live only in this box, not the
+        # existing-world path.
+        mode_diff_row = QHBoxLayout()
+        mode_diff_row.addWidget(QLabel("Game mode"))
+        self.gamemode_combo = QComboBox()
+        self.gamemode_combo.addItems(["Survival", "Creative", "Adventure", "Spectator"])
+        mode_diff_row.addWidget(self.gamemode_combo, 1)
+        mode_diff_row.addWidget(QLabel("Difficulty"))
+        self.difficulty_combo = QComboBox()
+        self.difficulty_combo.addItems(["Peaceful", "Easy", "Normal", "Hard"])
+        self.difficulty_combo.setCurrentText("Easy")
+        mode_diff_row.addWidget(self.difficulty_combo, 1)
+        new_layout.addLayout(mode_diff_row)
+
+        new_layout.addWidget(QLabel("World type"))
+        self.level_type_combo = QComboBox()
+        for label, value in setup_flow.LEVEL_TYPES.items():
+            self.level_type_combo.addItem(label, value)
+        new_layout.addWidget(self.level_type_combo)
+
+        structures_prot_row = QHBoxLayout()
+        self.generate_structures_check = QCheckBox("Generate structures")
+        self.generate_structures_check.setChecked(True)
+        structures_prot_row.addWidget(self.generate_structures_check)
+        structures_prot_row.addWidget(QLabel("Spawn protection"))
+        self.spawn_protection_spin = QSpinBox()
+        self.spawn_protection_spin.setRange(0, 500)
+        self.spawn_protection_spin.setValue(16)
+        structures_prot_row.addWidget(self.spawn_protection_spin, 1)
+        new_layout.addLayout(structures_prot_row)
+
+        new_layout.addWidget(QLabel("Seed (optional - leave blank for random)"))
+        self.seed_edit = QLineEdit()
+        new_layout.addWidget(self.seed_edit)
+
         step2_layout.addWidget(self.new_world_box)
         self.new_world_box.setVisible(False)
 
@@ -836,6 +874,12 @@ class SetupPage(QWidget):
         self.step1_msg.setText("")
         self.new_world_name_edit.setText("")
         self.owner_username_edit.setText("")
+        self.gamemode_combo.setCurrentIndex(0)  # Survival
+        self.difficulty_combo.setCurrentText("Easy")
+        self.level_type_combo.setCurrentIndex(0)  # Default
+        self.generate_structures_check.setChecked(True)
+        self.spawn_protection_spin.setValue(16)
+        self.seed_edit.setText("")
 
         # "Switch to a Previously Set-Up Server" doesn't need an instance dir at
         # all - it's ready the moment the wizard opens rather than waiting on
@@ -1086,6 +1130,22 @@ class SetupPage(QWidget):
         self.finish_btn.setEnabled(False)
         self.finish_btn.setText("Setting up...")
 
+        world_options = None
+        if self.is_new_world:
+            world_options = {
+                "gamemode": self.gamemode_combo.currentText().lower(),
+                "difficulty": self.difficulty_combo.currentText().lower(),
+                "level-type": self.level_type_combo.currentData(),
+                "generate-structures": "true" if self.generate_structures_check.isChecked() else "false",
+                "spawn-protection": str(self.spawn_protection_spin.value()),
+            }
+            # A raw newline in the seed would inject an extra line into
+            # server.properties, same class of issue valid_new_world_name already
+            # guards against for the world name - strip it down to one line.
+            seed = self.seed_edit.text().strip().splitlines()
+            if seed and seed[0]:
+                world_options["level-seed"] = seed[0]
+
         self._worker = Worker(
             setup_flow.finish_setup,
             self.instance_dir,
@@ -1095,6 +1155,7 @@ class SetupPage(QWidget):
             self.owner_uuid,
             self.owner_name,
             copy_mods=not self.is_new_world,
+            world_options=world_options,
         )
         self._worker.finished_result.connect(self._on_finish_done)
         self._worker.start()

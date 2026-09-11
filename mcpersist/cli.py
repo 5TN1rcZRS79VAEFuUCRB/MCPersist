@@ -67,6 +67,40 @@ def _prompt_version(default_version):
         print(f"{answer!r} isn't a recognized release version.")
 
 
+def _prompt_world_options():
+    """Only asked for a brand-new world - an already-generated existing world's
+    terrain/seed can't retroactively change, so these don't apply there."""
+    gamemode = setup_flow.GAMEMODES[
+        prompt_choice("Game mode", [g.capitalize() for g in setup_flow.GAMEMODES])
+    ]
+    difficulty = setup_flow.DIFFICULTIES[
+        prompt_choice("Difficulty", [d.capitalize() for d in setup_flow.DIFFICULTIES])
+    ]
+    level_type_labels = list(setup_flow.LEVEL_TYPES.keys())
+    level_type = setup_flow.LEVEL_TYPES[level_type_labels[prompt_choice("World type", level_type_labels)]]
+    generate_structures = (prompt("Generate structures? (y/n)", "y") or "y").strip().lower() != "n"
+    spawn_protection = prompt("Spawn protection radius (blocks)", "16")
+    try:
+        spawn_protection = str(int(spawn_protection))
+    except ValueError:
+        spawn_protection = "16"
+    # A raw newline would inject an extra line into server.properties - keep only
+    # the first line, same guard as the GUI's equivalent field.
+    seed = (prompt("Seed (optional - leave blank for random)", "") or "").strip().splitlines()
+    seed = seed[0] if seed else ""
+
+    options = {
+        "gamemode": gamemode,
+        "difficulty": difficulty,
+        "level-type": level_type,
+        "generate-structures": "true" if generate_structures else "false",
+        "spawn-protection": spawn_protection,
+    }
+    if seed:
+        options["level-seed"] = seed
+    return options
+
+
 def cmd_setup(args):
     # Switching to a previously set-up server needs no Minecraft instance at all -
     # it was already fully set up the first time around - so it shouldn't be stuck
@@ -124,12 +158,16 @@ def cmd_setup(args):
             owner_username = prompt("A username is required - nobody can join a whitelisted server without one")
 
         print()
+        world_options = _prompt_world_options()
+
+        print()
         prepare_result = setup_flow.prepare_new_world(instance_dir, world_name, owner_username)
         for line in prepare_result.lines:
             print(line)
         if not prepare_result.ok:
             return 1
     else:
+        world_options = None
         idx = prompt_choice("Pick a world to make persistent", worlds)
         world_name = worlds[idx]
 
@@ -147,7 +185,14 @@ def cmd_setup(args):
 
     print()
     finish_result = setup_flow.finish_setup(
-        instance_dir, world_name, mc_version, loader, owner_uuid, owner_name, copy_mods=not generate_new
+        instance_dir,
+        world_name,
+        mc_version,
+        loader,
+        owner_uuid,
+        owner_name,
+        copy_mods=not generate_new,
+        world_options=world_options,
     )
     for line in finish_result.lines:
         print(line)

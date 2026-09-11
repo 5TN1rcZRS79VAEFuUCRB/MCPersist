@@ -50,13 +50,18 @@ def detect_new_world_info(instance_dir):
     }
 
 
-def valid_new_world_name(world_name):
-    if not world_name or not world_name.strip() or len(world_name) > 100:
+def _is_path_safe_name(world_name):
+    """The security-relevant half of valid_new_world_name, without its length cap.
+    It becomes a directory name directly under servers/ (no separators/"..", so it
+    can't escape that directory) and gets written verbatim into server.properties'
+    motd line - also reject control characters (newlines in particular), which
+    would otherwise inject extra lines into that file. Used on its own for an
+    existing world's name (see prepare_world) - already a real directory on disk,
+    so already a legal Windows path component, but the length cap below exists for
+    freshly-typed-name sanity, not as part of the actual safety boundary, so it
+    shouldn't reject a long name that was already fine as a real folder."""
+    if not world_name or not world_name.strip():
         return False
-    # It becomes a directory name directly under servers/ (no separators/"..", so it
-    # can't escape that directory) and gets written verbatim into server.properties'
-    # motd line - also reject control characters (newlines in particular), which
-    # would otherwise inject extra lines into that file.
     if world_name in (".", ".."):
         return False
     if any(c in world_name for c in "\\/:*?\"<>|"):
@@ -64,11 +69,36 @@ def valid_new_world_name(world_name):
     return all(ord(c) >= 0x20 for c in world_name)
 
 
+def valid_new_world_name(world_name):
+    if world_name and len(world_name) > 100:
+        return False
+    return _is_path_safe_name(world_name)
+
+
+GAMEMODES = ("survival", "creative", "adventure", "spectator")
+DIFFICULTIES = ("peaceful", "easy", "normal", "hard")
+# Display label -> the actual server.properties value. Namespaced ("minecraft:...")
+# rather than the older bare-word values (DEFAULT/FLAT/...) - matches what modern
+# (1.19+) servers, the only ones this app targets, actually expect.
+LEVEL_TYPES = {
+    "Default": "minecraft:normal",
+    "Superflat": "minecraft:flat",
+    "Large Biomes": "minecraft:large_biomes",
+    "Amplified": "minecraft:amplified",
+    "Single Biome": "minecraft:single_biome_surface",
+}
+
+
 def write_eula(server_dir):
     (Path(server_dir) / "eula.txt").write_text("eula=true\n", encoding="utf-8")
 
 
-def write_server_properties(server_dir, cfg, enable_whitelist):
+def write_server_properties(server_dir, cfg, enable_whitelist, world_options=None):
+    """world_options optionally carries the new-world generation settings (gamemode,
+    difficulty, level-type, generate-structures, spawn-protection, level-seed) - only
+    meaningful the first time a brand-new world is created (an existing, already-
+    generated world's terrain/seed can't retroactively change), so callers only pass
+    it from the "Generate New World" path."""
     props = {
         "server-port": "25565",
         "level-name": "world",
@@ -81,6 +111,8 @@ def write_server_properties(server_dir, cfg, enable_whitelist):
         "view-distance": str(config.ensure_view_distance(cfg)),
         "simulation-distance": str(config.ensure_simulation_distance(cfg)),
     }
+    if world_options:
+        props.update(world_options)
     path = Path(server_dir) / "server.properties"
     lines = [f"{k}={v}" for k, v in props.items()]
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
@@ -153,7 +185,7 @@ def prepare_world(instance_dir, world_name):
     """Copies the world save and detects/whitelists the owner. Split from
     finish_setup so callers can show the detected owner (and ask about cheats) before
     kicking off the slow server-jar download."""
-    if not valid_new_world_name(world_name):
+    if not _is_path_safe_name(world_name):
         return ActionResult(False, [f"{world_name!r} isn't a valid world name."])
 
     save_path = Path(instance_dir) / "saves" / world_name
@@ -249,7 +281,9 @@ def _copy_mods_and_report(lines, instance_dir, server_dir):
         )
 
 
-def finish_setup(instance_dir, world_name, mc_version, loader, owner_uuid, owner_name, copy_mods=True):
+def finish_setup(
+    instance_dir, world_name, mc_version, loader, owner_uuid, owner_name, copy_mods=True, world_options=None
+):
     """Downloads/installs the matching server (vanilla/Fabric: a direct jar
     download; Forge: running its own installer, since it doesn't publish one), ops
     the owner if one was whitelisted, and writes eula/server.properties/
@@ -259,6 +293,8 @@ def finish_setup(instance_dir, world_name, mc_version, loader, owner_uuid, owner
     only ever passed False for a brand-new world, which isn't "ported" from the
     instance the way an existing save is, so dragging along whatever mods that
     instance currently happens to have doesn't make sense the same way.
+
+    world_options is passed straight through to write_server_properties - see there.
 
     The owner is always opped when known, not a choice - getting into a whitelisted
     server at all already means they're trusted enough to be there, so there's no
@@ -349,7 +385,9 @@ def finish_setup(instance_dir, world_name, mc_version, loader, owner_uuid, owner
         }
     )
     write_eula(server_dir)
-    write_server_properties(server_dir, cfg, enable_whitelist=bool(owner_uuid and owner_name))
+    write_server_properties(
+        server_dir, cfg, enable_whitelist=bool(owner_uuid and owner_name), world_options=world_options
+    )
     config.save(cfg)
     write_world_meta(server_dir, cfg)
 
