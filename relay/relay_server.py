@@ -115,10 +115,19 @@ async def _upgrade_to_tls(writer):
     tls_context comment for why this is done as an explicit in-handler upgrade
     (writer.start_tls()) rather than asyncio.start_server(..., ssl=...) doing it
     implicitly. Returns True on success; on failure (garbage/non-TLS input, a
-    mid-handshake disconnect) closes the writer and returns False, same shape as
-    _acquire_conn_slot's caller-checks-and-closes pattern."""
+    mid-handshake disconnect, or simply never sending anything) closes the writer
+    and returns False, same shape as _acquire_conn_slot's caller-checks-and-closes
+    pattern.
+
+    Wrapped in the same HANDSHAKE_TIMEOUT every other read in this file uses -
+    without it, a connection that completes the raw TCP accept and then sends
+    nothing at all hangs here forever, never reaching the finally block that
+    releases its conn_slot. Confirmed as a real, cheap DoS by direct reproduction:
+    MAX_CONNECTIONS_PER_IP (20 by default) silent connections from one IP
+    permanently exhausted that IP's entire quota - across all three ports, since
+    conn_counts is shared - with no recovery, ever."""
     try:
-        await writer.start_tls(tls_context)
+        await asyncio.wait_for(writer.start_tls(tls_context), timeout=HANDSHAKE_TIMEOUT)
         return True
     except Exception:
         writer.close()
