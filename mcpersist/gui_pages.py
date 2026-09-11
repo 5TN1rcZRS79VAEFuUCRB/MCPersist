@@ -9,6 +9,7 @@ from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QFileDialog,
+    QFrame,
     QGroupBox,
     QHBoxLayout,
     QLabel,
@@ -16,6 +17,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QRadioButton,
+    QScrollArea,
     QSpinBox,
     QTextEdit,
     QVBoxLayout,
@@ -35,9 +37,39 @@ def _open_folder(path):
 class StatusPage(QWidget):
     go_to_setup = Signal()
 
+    def sizeHint(self):
+        # Reports the actual content's natural size, not the QScrollArea's own
+        # generic default sizeHint (a small, fixed suggestion unrelated to what's
+        # inside it) - MainWindow.fit_to_current_page relies on this to size the
+        # window to fit real content when it's short enough to (capping it at 780
+        # regardless, with the scroll area handling whatever doesn't fit past that).
+        return self._content.sizeHint()
+
     def __init__(self):
         super().__init__()
-        layout = QVBoxLayout(self)
+        # Everything below lives in an inner widget wrapped in a QScrollArea,
+        # instead of laid out directly on `self` - this page has grown a lot
+        # (update banner, status, World/Memory/Performance groups, each with its
+        # own wrapped detected-specs/message labels), and the window's own height
+        # is deliberately capped (see MainWindow.fit_to_current_page) rather than
+        # growing to fit arbitrarily tall content. A long action_msg (the
+        # start/stop result, which includes full log file paths and wraps to
+        # several lines - exactly what's on screen right after clicking Start) or
+        # simply a taller stack of sections than fits under that cap previously
+        # had nowhere to go but off the bottom edge, silently clipped with no way
+        # to scroll to it. A QScrollArea makes "content taller than the window"
+        # degrade to a scrollbar instead of lost/overlapping text, regardless of
+        # font size, DPI scaling, or how much more this page grows later.
+        outer_layout = QVBoxLayout(self)
+        outer_layout.setContentsMargins(0, 0, 0, 0)
+        self._content = QWidget()
+        scroll = QScrollArea()
+        scroll.setWidget(self._content)
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        outer_layout.addWidget(scroll)
+
+        layout = QVBoxLayout(self._content)
         layout.setContentsMargins(16, 16, 16, 16)
         layout.setSpacing(14)
 

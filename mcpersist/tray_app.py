@@ -44,7 +44,14 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("MCPersist")
-        self.resize(420, 560)
+        # 420 used to be enough, but the status page's own natural (minimum) width
+        # is now ~478px - the World section's 3-button folder row and the
+        # Memory/Performance Save-button rows don't have room to shrink any
+        # further (their buttons are already at their own minimum), so at 420 Qt
+        # can't lay them out without cramming - confirmed by direct measurement
+        # (StatusPage.sizeHint().width() == 478 well before this session's other
+        # changes, so this wasn't something the scroll-area fix introduced).
+        self.resize(480, 560)
         # A long unbroken status message (a full file path with no spaces to wrap
         # at, say) can otherwise force the window to stretch far wider than
         # intended to fit it on one line, and Qt doesn't shrink it back down again
