@@ -72,6 +72,17 @@ STATUS_PATH = Path(__file__).resolve().parent / "relay_status.json"
 PING_INTERVAL = 20
 PING_TIMEOUT = 45
 
+# Established player<->backend sessions have no other timeout covering them once
+# piping starts (HANDSHAKE_TIMEOUT/CONNECT_TIMEOUT are already released by then, and
+# CONN_RATE_LIMIT only gates *new* attempts) - a connection that completes the
+# handshake and then just sits there, sending nothing forever (deliberately, or a
+# genuinely frozen client with no clean FIN), would otherwise hold one of that IP's
+# MAX_CONNECTIONS_PER_IP slots and both real sockets open indefinitely - a slow-loris
+# gap the other protections don't cover. Real Minecraft traffic includes a keepalive
+# packet roughly once a second in both directions, so this is generously loose enough
+# to never affect an actual player, just to bound a truly-idle-forever connection.
+PIPE_IDLE_TIMEOUT = 300
+
 clients = {}  # subdomain -> StreamWriter of the control connection
 pending = {}  # connection id -> asyncio.Future resolving to (data_reader, data_writer)
 auto_conn_counts = {}  # source ip -> count of live auto-registered (unreserved) connections
@@ -171,8 +182,17 @@ def generate_unique_subdomain(taken):
         candidate = f"{random.choice(ADJECTIVES)}-{random.choice(NOUNS)}"
         if candidate not in taken:
             return candidate
-    # extremely unlikely fallback if the namespace is saturated
-    return f"{random.choice(ADJECTIVES)}-{random.choice(NOUNS)}-{random.randint(100, 999)}"
+    # Extremely unlikely fallback if the namespace is saturated (auto_assignments.json
+    # entries are never pruned by design - see get_or_assign_subdomain - so a
+    # long-lived, busy relay could realistically approach this over time). Still
+    # checked against `taken`, same as the primary loop above - an unchecked
+    # fallback could otherwise hand out a collision, silently recording two
+    # different IPs against the same subdomain in auto_assignments.json.
+    for _ in range(50):
+        candidate = f"{random.choice(ADJECTIVES)}-{random.choice(NOUNS)}-{random.randint(100, 999)}"
+        if candidate not in taken:
+            return candidate
+    return f"{uuid.uuid4().hex[:12]}"
 
 
 def get_or_assign_subdomain(peer_ip):
@@ -232,6 +252,7 @@ async def _ping_loop(writer, subdomain, last_seen):
 async def handle_control(reader, writer):
     subdomain = None
     is_auto = False
+    auto_counted = False
     ping_task = None
     peer_ip = (writer.get_extra_info("peername") or (None,))[0]
     if _rate_limited(peer_ip):
@@ -280,6 +301,7 @@ async def handle_control(reader, writer):
                 writer.close()
                 return
             auto_conn_counts[peer_ip] = auto_conn_counts.get(peer_ip, 0) + 1
+            auto_counted = True
 
         clients[subdomain] = writer
         await send_json(writer, {"type": "registered", "subdomain": subdomain})
@@ -312,7 +334,16 @@ async def handle_control(reader, writer):
         if subdomain and clients.get(subdomain) is writer:
             del clients[subdomain]
             print(f"[control] {subdomain} disconnected", flush=True)
-        if is_auto and peer_ip and peer_ip in auto_conn_counts:
+        if auto_counted and peer_ip and peer_ip in auto_conn_counts:
+            # Only decrement if THIS connection is the one that incremented it above -
+            # is_auto alone isn't enough to gate this: it's set True before the
+            # auto-registration checks run, including the ones that reject and
+            # return early (already at MAX_AUTO_CONNECTIONS_PER_IP, or "already
+            # connected from this address") without ever incrementing the counter.
+            # Decrementing unconditionally on any is_auto connection would let a
+            # rejected duplicate attempt from an IP that already has a real,
+            # counted auto connection wrongly drop that real connection's count to
+            # zero - defeating MAX_AUTO_CONNECTIONS_PER_IP for every attempt after it.
             auto_conn_counts[peer_ip] -= 1
             if auto_conn_counts[peer_ip] <= 0:
                 del auto_conn_counts[peer_ip]
@@ -360,12 +391,12 @@ async def handle_data(reader, writer):
 async def pipe(reader, writer):
     try:
         while True:
-            chunk = await reader.read(65536)
+            chunk = await asyncio.wait_for(reader.read(65536), timeout=PIPE_IDLE_TIMEOUT)
             if not chunk:
                 break
             writer.write(chunk)
-            await writer.drain()
-    except (ConnectionResetError, BrokenPipeError):
+            await asyncio.wait_for(writer.drain(), timeout=PIPE_IDLE_TIMEOUT)
+    except (ConnectionResetError, BrokenPipeError, asyncio.TimeoutError):
         pass
     finally:
         writer.close()
@@ -430,8 +461,19 @@ async def handle_public(reader, writer):
                 del pending_by_subdomain[subdomain]
             reserved_pending_slot = False
 
-        data_writer.write(raw)
-        await data_writer.drain()
+        try:
+            data_writer.write(raw)
+            await asyncio.wait_for(data_writer.drain(), timeout=HANDSHAKE_TIMEOUT)
+        except Exception:
+            # The backend accepted the data connection but then reset/stalled right
+            # as we tried to replay the buffered handshake into it - a real,
+            # reachable race (confirmed by review, not just theoretical), not just
+            # the player's own socket. Without this, an exception here skips
+            # straight to `finally`, which only ever closed `writer` (the public
+            # socket) - data_writer was never closed anywhere else on this path and
+            # would leak, relying on GC to eventually reclaim it.
+            data_writer.close()
+            return
 
         print(f"[public] {peer} -> {subdomain}", flush=True)
         await asyncio.gather(
@@ -470,15 +512,26 @@ async def _background_loop(start_time):
     last_cleanup = time.monotonic()
     while True:
         await asyncio.sleep(STATUS_WRITE_INTERVAL)
-        _write_status_snapshot(start_time)
+        try:
+            # This coroutine runs inside the same top-level asyncio.gather() as the
+            # three real servers (see main()) - unlike every per-connection handler,
+            # which is its own isolated Task and can't bring the process down, an
+            # unhandled exception here (a transient disk-full/permissions error
+            # writing the status file, however rare) would propagate out of gather()
+            # and crash the entire relay, dropping every live connection, just to
+            # skip one status-file write. Not worth that risk for a purely
+            # informational admin feature.
+            _write_status_snapshot(start_time)
 
-        now = time.monotonic()
-        if now - last_cleanup >= CLEANUP_INTERVAL:
-            last_cleanup = now
-            cutoff = now - CONN_RATE_WINDOW
-            stale = [ip for ip, attempts in conn_attempts.items() if not attempts or attempts[-1] < cutoff]
-            for ip in stale:
-                del conn_attempts[ip]
+            now = time.monotonic()
+            if now - last_cleanup >= CLEANUP_INTERVAL:
+                last_cleanup = now
+                cutoff = now - CONN_RATE_WINDOW
+                stale = [ip for ip, attempts in conn_attempts.items() if not attempts or attempts[-1] < cutoff]
+                for ip in stale:
+                    del conn_attempts[ip]
+        except Exception as e:
+            print(f"[background] error in status/cleanup loop: {e}", flush=True)
 
 
 DEFAULT_TLS_CERT = Path(__file__).resolve().parent / "certs" / "fullchain.pem"

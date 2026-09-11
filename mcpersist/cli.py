@@ -305,7 +305,12 @@ def cmd_configure_relay(args):
         "random address automatically. Only do this if you want a fixed, memorable one -\n"
         "get a subdomain + token from whoever runs the relay (`admin_cli.py add-user <name>`)."
     )
-    relay_host = prompt("Relay host (VPS IP or hostname)", cfg.get("relay_host"))
+    # Must be a real hostname, not a bare IP - the control/data channels are TLS now
+    # (see relay/relay_server.py) and certificate verification needs a hostname to
+    # check against (SNI). A bare IP would pass this prompt but fail TLS on every
+    # connection attempt, surfacing later as a cryptic SSL error in the tunnel log
+    # rather than here at configuration time.
+    relay_host = prompt("Relay hostname (e.g. relay.example.com - not a bare IP, TLS needs a real hostname)", cfg.get("relay_host"))
     control_port = prompt("Relay control port", str(cfg.get("relay_control_port") or 7000))
     data_port = prompt("Relay data port", str(cfg.get("relay_data_port") or 7001))
     subdomain = prompt("Your subdomain", cfg.get("subdomain"))
