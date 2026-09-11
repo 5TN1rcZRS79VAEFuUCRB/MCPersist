@@ -153,6 +153,16 @@ class StatusPage(QWidget):
         setup_btn.clicked.connect(self.go_to_setup.emit)
         world_layout.addWidget(setup_btn)
 
+        # For recovering worlds left behind in an old install folder - e.g. after
+        # a manual reinstall (done by hand because self-update failed) into a
+        # fresh folder that doesn't have the old servers/config.json in it. Each
+        # world folder is fully self-contained, so this is just a folder copy;
+        # "Switch to a Previously Set-Up Server" (in the setup wizard) is what
+        # actually makes an imported one active.
+        recover_btn = QPushButton("Recover Previous Worlds...")
+        recover_btn.clicked.connect(self.on_recover_previous_worlds)
+        world_layout.addWidget(recover_btn)
+
         folder_row = QHBoxLayout()
         open_world_btn = QPushButton("World Folder")
         open_world_btn.clicked.connect(self.open_world_folder)
@@ -235,6 +245,7 @@ class StatusPage(QWidget):
         self.init_perf_controls()
 
         self._worker = None
+        self._recover_worker = None
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.refresh)
         self.timer.start(4000)
@@ -454,6 +465,26 @@ class StatusPage(QWidget):
         _, _, server_dir = self.current_status()
         if server_dir is not None:
             _open_folder(server_dir / "logs")
+
+    def on_recover_previous_worlds(self):
+        folder = QFileDialog.getExistingDirectory(
+            self, "Select the old MCPersist folder (or its \"servers\" folder)"
+        )
+        if not folder:
+            return
+        self.action_msg.setStyleSheet("color: #888;")
+        self.action_msg.setText("Looking for worlds to recover...")
+        self._recover_worker = Worker(setup_flow.import_worlds_from, folder)
+        self._recover_worker.finished_result.connect(self._on_recover_done)
+        self._recover_worker.start()
+
+    def _on_recover_done(self, result):
+        if isinstance(result, WorkerError):
+            self.action_msg.setStyleSheet("color: #e74c3c;")
+            self.action_msg.setText(f"Recovery failed: {result.message}")
+            return
+        self.action_msg.setStyleSheet("color: #888;" if result.ok else "color: #e74c3c;")
+        self.action_msg.setText("\n".join(result.lines))
 
     def init_ram_controls(self):
         import psutil

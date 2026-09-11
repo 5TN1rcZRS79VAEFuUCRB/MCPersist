@@ -230,6 +230,13 @@ def cmd_set_address(args):
     return 0
 
 
+def cmd_import_worlds(args):
+    result = setup_flow.import_worlds_from(args.folder)
+    for line in result.lines:
+        print(line)
+    return 0 if result.ok else 1
+
+
 def cmd_whitelist_add(args):
     cfg = config.load()
     server_dir = config.server_dir(cfg)
@@ -329,6 +336,12 @@ def build_parser():
     p_wl = sub.add_parser("whitelist-add", help="Add a player to the whitelist (works whether or not the server is running)")
     p_wl.add_argument("username")
     p_wl.set_defaults(func=cmd_whitelist_add)
+
+    p_import = sub.add_parser(
+        "import-worlds", help="Recover worlds from another MCPersist install (e.g. after a manual reinstall)"
+    )
+    p_import.add_argument("folder", help="The old install's folder, or its servers folder directly")
+    p_import.set_defaults(func=cmd_import_worlds)
 
     sub.add_parser("check-update", help="Check GitHub for a newer release").set_defaults(func=cmd_check_update)
 

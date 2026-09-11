@@ -3,6 +3,7 @@ the save, downloading a matching server, owner whitelisting - shared by the CLI 
 the GUI so neither duplicates it."""
 
 import json
+import shutil
 from pathlib import Path
 
 from . import config, java_manager, javacheck, mojang, server_fabric, server_forge, server_vanilla, world
@@ -413,6 +414,66 @@ def list_known_servers():
             {"world_name": entry.name, "loader": meta.get("loader"), "mc_version": meta.get("mc_version")}
         )
     return found
+
+
+def import_worlds_from(source_root):
+    """Recovers worlds from another MCPersist install (e.g. an old folder left
+    behind after a manual reinstall, done by hand because self-update failed) -
+    each world folder under servers/ is already fully self-contained
+    (mcpersist_meta.json + server.properties + whitelist.json + the world save
+    itself), the same thing that makes "Switch to a Previous Server" work at
+    all, so recovering one is just copying that folder over - nothing further
+    to reconstruct. Accepts either the old install's root folder or its
+    servers/ folder directly, whichever the user happened to pick. Skips (and
+    reports, rather than silently overwriting) any world whose name already
+    exists in the current servers/ - if that one still has server.jar/a
+    running config the user cares about, clobbering it would be a real loss,
+    not a convenience."""
+    source_root = Path(source_root)
+    source_servers = source_root / "servers"
+    if not source_servers.is_dir():
+        source_servers = source_root
+
+    try:
+        source_servers = source_servers.resolve()
+    except OSError:
+        return ActionResult(False, [f"{source_root} isn't a folder this can read."])
+    if source_servers == SERVERS_DIR.resolve():
+        return ActionResult(False, ["That's already this install's own servers folder - nothing to import."])
+
+    candidates = [
+        entry
+        for entry in sorted(source_servers.iterdir())
+        if entry.is_dir() and (entry / "mcpersist_meta.json").exists()
+    ] if source_servers.is_dir() else []
+
+    if not candidates:
+        return ActionResult(
+            False,
+            [
+                f"No MCPersist worlds found under {source_servers} - pick the old install's main "
+                'folder (the one with MCPersist.exe in it) or its "servers" folder directly.'
+            ],
+        )
+
+    imported, skipped = [], []
+    for entry in candidates:
+        dest = SERVERS_DIR / entry.name
+        if dest.exists():
+            skipped.append(entry.name)
+            continue
+        shutil.copytree(entry, dest)
+        imported.append(entry.name)
+
+    lines = []
+    if imported:
+        lines.append(f"Imported {len(imported)} world(s): {', '.join(imported)}.")
+        lines.append('Use "Set Up a Server" -> "Switch to a Previously Set-Up Server" to start using one.')
+    if skipped:
+        lines.append(
+            f"Skipped {len(skipped)} world(s) already present here (not overwritten): {', '.join(skipped)}."
+        )
+    return ActionResult(True, lines, data={"imported": imported, "skipped": skipped})
 
 
 def switch_to_world(world_name):

@@ -118,6 +118,7 @@ class MainWindow(QMainWindow):
             getattr(self.status_page, "_worker", None),
             getattr(self.status_page, "_update_worker", None),
             getattr(self.status_page, "_update_apply_worker", None),
+            getattr(self.status_page, "_recover_worker", None),
             getattr(self.setup_page, "_worker", None),
             getattr(self.setup_page, "_version_worker", None),
         )
