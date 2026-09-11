@@ -39,14 +39,14 @@ def prompt_choice(msg, options):
 
 
 def _prompt_loader(suggested_loader):
-    if suggested_loader in ("forge", "neoforge"):
+    if suggested_loader == "neoforge":
         print(
-            f"WARNING: detected {suggested_loader.title()}, which isn't supported yet - "
-            "only Vanilla and Fabric servers can be set up right now. Pick one below, but the "
-            "world may not run correctly without its actual mod loader."
+            "WARNING: detected NeoForge, which isn't supported yet - only Vanilla, Fabric, and "
+            "Forge servers can be set up right now. Pick one below, but the world may not run "
+            "correctly without its actual mod loader."
         )
-    loader_idx = prompt_choice(f"Server type (detected: {suggested_loader})", ["vanilla", "fabric"])
-    return ["vanilla", "fabric"][loader_idx]
+    loader_idx = prompt_choice(f"Server type (detected: {suggested_loader})", ["vanilla", "fabric", "forge"])
+    return ["vanilla", "fabric", "forge"][loader_idx]
 
 
 def _prompt_version(default_version):
@@ -146,7 +146,9 @@ def cmd_setup(args):
     owner_name = prepare_result.data.get("owner_name")
 
     print()
-    finish_result = setup_flow.finish_setup(instance_dir, world_name, mc_version, loader, owner_uuid, owner_name)
+    finish_result = setup_flow.finish_setup(
+        instance_dir, world_name, mc_version, loader, owner_uuid, owner_name, copy_mods=not generate_new
+    )
     for line in finish_result.lines:
         print(line)
     if not finish_result.ok:

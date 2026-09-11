@@ -5,7 +5,7 @@ import json
 import time
 from dataclasses import dataclass, field
 
-from . import config, java_manager, javacheck, mojang, process_manager, rcon, server_vanilla, tunnel_relay, world
+from . import config, java_manager, javacheck, mojang, process_manager, rcon, server_forge, server_vanilla, tunnel_relay, world
 
 
 @dataclass
@@ -69,8 +69,13 @@ def start_server(cfg, server_dir):
                 ],
             )
 
+    # Forge (1.17+) doesn't produce a directly runnable server.jar the way vanilla/
+    # Fabric do - it's launched via an @args-file under libraries/ instead (see
+    # server_forge.find_launch_args_file). Everything else about starting it is
+    # identical, so this is the only real branch point.
+    forge_args_file = server_forge.find_launch_args_file(server_dir) if cfg.get("loader") == "forge" else None
     jar_path = server_dir / "server.jar"
-    if not jar_path.exists():
+    if forge_args_file is None and not jar_path.exists():
         return ActionResult(False, [f"Missing {jar_path} - run `run.bat setup` again."])
 
     # Re-applied fresh before every start, same reasoning as the memory sizing below -
@@ -88,7 +93,28 @@ def start_server(cfg, server_dir):
     )
 
     memory_mb = config.ensure_memory_mb(cfg)
-    cmd = [java_path, f"-Xmx{memory_mb}M", f"-Xms{memory_mb}M", "-jar", str(jar_path), "nogui"]
+    if forge_args_file is not None:
+        # Matches Forge's own generated run.bat exactly (java @user_jvm_args.txt
+        # @libraries/.../win_args.txt nogui), not a reconstruction from first
+        # principles - confirmed by direct reproduction that deviating from it
+        # breaks the launch: an *absolute* path for the args file (instead of
+        # relative to server_dir, which this always runs with as cwd) made
+        # ModLauncher fail applying its access transformers to core Minecraft
+        # server classes before the server ever really started. user_jvm_args.txt
+        # is real Forge output too (normally just commented-out placeholders for
+        # -Xmx/-Xms) - referencing it costs nothing and matches what Forge itself
+        # expects to be read alongside win_args.txt. Our own -Xmx/-Xms still have
+        # to come *before* either @file, since win_args.txt's own content ends in
+        # "-jar <shim>" - once a "-jar" appears, java treats everything after it
+        # as program arguments, not JVM flags, so anything meant as a JVM flag
+        # (ours included) has to be placed earlier than that.
+        args_file_rel = forge_args_file.relative_to(server_dir)
+        cmd = [java_path, f"-Xmx{memory_mb}M", f"-Xms{memory_mb}M"]
+        if (server_dir / "user_jvm_args.txt").exists():
+            cmd.append("@user_jvm_args.txt")
+        cmd += [f"@{args_file_rel}", "nogui"]
+    else:
+        cmd = [java_path, f"-Xmx{memory_mb}M", f"-Xms{memory_mb}M", "-jar", str(jar_path), "nogui"]
     log_path = server_dir / "logs" / "server.out.log"
     pid = process_manager.launch_detached(cmd, cwd=server_dir, log_path=log_path, short_tmp=True)
     process_manager.write_pid(server_pid_path, pid)

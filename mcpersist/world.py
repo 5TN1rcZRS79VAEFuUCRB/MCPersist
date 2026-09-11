@@ -23,6 +23,14 @@ def default_instance_dir():
 # specific, so a launcher added later just needs its folder name added here.
 _MULTIMC_FAMILY_LAUNCHERS = ("PrismLauncher", "MultiMC", "PolyMC", "ATLauncher")
 
+# The Modrinth App (Theseus) uses a differently-named top-level folder
+# ("profiles", not "instances") and a flat layout - Minecraft's own files sit
+# directly under <profile>/, with no nested minecraft/.minecraft subfolder the
+# way the MultiMC family has - confirmed against Modrinth's own support docs
+# (%APPDATA%\ModrinthApp\profiles\<name>\saves\<world>\), not guessed. The
+# second entry is where older installs kept the same layout before a rename.
+_MODRINTH_LAUNCHERS = ("ModrinthApp", "com.modrinth.theseus")
+
 # A directory "looks like" a real Minecraft instance if it has any of these - not
 # launcher-specific parsing, so this works across launchers (and Minecraft versions)
 # without needing to know each one's exact metadata format. A brand-new instance
@@ -85,6 +93,18 @@ def find_instances():
                 # directly in the instance folder instead of a nested subfolder.
                 add(f"{instance_dir.name} ({launcher_name})", instance_dir)
 
+    for launcher_name in _MODRINTH_LAUNCHERS:
+        profiles_dir = appdata / launcher_name / "profiles"
+        if not profiles_dir.exists():
+            continue
+        try:
+            entries = sorted(profiles_dir.iterdir())
+        except OSError:
+            continue
+        for profile_dir in entries:
+            if profile_dir.is_dir() and _looks_like_instance_dir(profile_dir):
+                add(f"{profile_dir.name} (Modrinth App)", profile_dir)
+
     return found
 
 
@@ -111,7 +131,7 @@ def read_mc_version(save_path):
         return None
 
 
-SUPPORTED_LOADERS = ("vanilla", "fabric")
+SUPPORTED_LOADERS = ("vanilla", "fabric", "forge")
 
 
 def _detect_loader_from_curseforge_manifest(instance_dir):

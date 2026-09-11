@@ -145,9 +145,12 @@ class StatusPage(QWidget):
         folder_row = QHBoxLayout()
         open_world_btn = QPushButton("World Folder")
         open_world_btn.clicked.connect(self.open_world_folder)
+        open_mods_btn = QPushButton("Mods Folder")
+        open_mods_btn.clicked.connect(self.open_mods_folder)
         open_logs_btn = QPushButton("View Logs")
         open_logs_btn.clicked.connect(self.open_logs)
         folder_row.addWidget(open_world_btn)
+        folder_row.addWidget(open_mods_btn)
         folder_row.addWidget(open_logs_btn)
         world_layout.addLayout(folder_row)
         layout.addWidget(world_box)
@@ -417,6 +420,13 @@ class StatusPage(QWidget):
         if server_dir is not None:
             _open_folder(server_dir)
 
+    def open_mods_folder(self):
+        _, _, server_dir = self.current_status()
+        if server_dir is not None:
+            mods_dir = server_dir / "mods"
+            mods_dir.mkdir(exist_ok=True)
+            _open_folder(mods_dir)
+
     def open_logs(self):
         _, _, server_dir = self.current_status()
         if server_dir is not None:
@@ -550,6 +560,7 @@ class SetupPage(QWidget):
         self.world_name = None
         self.mc_version = None
         self.loader = None
+        self.is_new_world = False
         self.owner_uuid = None
         self.owner_name = None
         self._version_worker = None
@@ -680,8 +691,10 @@ class SetupPage(QWidget):
         loader_row = QHBoxLayout()
         self.vanilla_radio = QRadioButton("Vanilla")
         self.fabric_radio = QRadioButton("Fabric")
+        self.forge_radio = QRadioButton("Forge")
         loader_row.addWidget(self.vanilla_radio)
         loader_row.addWidget(self.fabric_radio)
+        loader_row.addWidget(self.forge_radio)
         version_loader_layout.addLayout(loader_row)
         step2_layout.addWidget(self.version_loader_box)
 
@@ -870,11 +883,12 @@ class SetupPage(QWidget):
         self._select_version(info["mc_version"])
         self.vanilla_radio.setChecked(suggested == "vanilla")
         self.fabric_radio.setChecked(suggested == "fabric")
-        if suggested in ("forge", "neoforge"):
+        self.forge_radio.setChecked(suggested == "forge")
+        if suggested == "neoforge":
             self.loader_warning.setText(
-                f"Detected {suggested.title()}, which isn't supported yet - only Vanilla and "
-                "Fabric servers can be set up right now. Pick one below, but the world may not "
-                "run correctly without its actual mod loader."
+                "Detected NeoForge, which isn't supported yet - only Vanilla, Fabric, and Forge "
+                "servers can be set up right now. Pick one below, but the world may not run "
+                "correctly without its actual mod loader."
             )
         else:
             self.loader_warning.setText("")
@@ -935,8 +949,14 @@ class SetupPage(QWidget):
 
     def on_prepare_world(self):
         self.mc_version = self.mc_version_combo.currentText()
-        self.loader = "fabric" if self.fabric_radio.isChecked() else "vanilla"
+        if self.forge_radio.isChecked():
+            self.loader = "forge"
+        elif self.fabric_radio.isChecked():
+            self.loader = "fabric"
+        else:
+            self.loader = "vanilla"
         generate_new = self.mode_new_radio.isChecked()
+        self.is_new_world = generate_new
 
         if not self.mc_version_combo.isEnabled() or not self.mc_version:
             self.step1_msg.setText("")
@@ -1001,6 +1021,7 @@ class SetupPage(QWidget):
             self.loader,
             self.owner_uuid,
             self.owner_name,
+            copy_mods=not self.is_new_world,
         )
         self._worker.finished_result.connect(self._on_finish_done)
         self._worker.start()

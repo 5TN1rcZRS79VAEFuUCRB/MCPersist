@@ -5,7 +5,7 @@ the GUI so neither duplicates it."""
 import json
 from pathlib import Path
 
-from . import config, java_manager, javacheck, mojang, server_fabric, server_vanilla, world
+from . import config, java_manager, javacheck, mojang, server_fabric, server_forge, server_vanilla, world
 from .actions import ActionResult
 from .paths import SERVERS_DIR
 
@@ -125,7 +125,8 @@ def _whitelist_result_lines(whitelisted, owner_name, not_whitelisted_reason):
         lines.append(
             "To add a friend: have the server running, then either run "
             "`whitelist add <their Minecraft username>` via RCON/the server console, or have an "
-            "op (like you) run `/whitelist add <username>` in-game. Exact username, case-sensitive."
+            "op (like you) run `/whitelist add <username>` in-game. Minecraft usernames aren't "
+            "case-sensitive, but it still needs to be spelled correctly."
         )
         lines.append(
             "DISCLAIMER: leave the whitelist ON. Your server is reachable at a public address - "
@@ -222,9 +223,36 @@ def prepare_new_world(instance_dir, world_name, owner_username):
     )
 
 
-def finish_setup(instance_dir, world_name, mc_version, loader, owner_uuid, owner_name):
-    """Downloads the matching server jar, ops the owner if one was whitelisted, and
-    writes eula/server.properties/config.json. Assumes prepare_world already ran.
+def _copy_mods_and_report(lines, instance_dir, server_dir):
+    """Shared by Fabric and Forge - both are just jar drops in a mods/ folder as
+    far as this is concerned, loader-specific only in name (it lives in
+    server_fabric.py from when Fabric was the only mod loader supported)."""
+    mods, skipped_mods = server_fabric.copy_mods(instance_dir, server_dir)
+    if mods:
+        lines.append(f"Copied {len(mods)} mod(s) into the server's mods/ folder.")
+        lines.append(
+            "WARNING: client-only mods (rendering/HUD/etc.) can crash a dedicated server - "
+            "if startup fails, remove them from the mods/ folder and try again."
+        )
+    if skipped_mods:
+        lines.append(
+            f"Skipped {len(skipped_mods)} mod(s) known to be incompatible with a dedicated "
+            f"server (not copied): {', '.join(skipped_mods)}. e4mc specifically crashes the "
+            "server the moment a player joins - MCPersist replaces what it does, so it's not "
+            "needed anyway."
+        )
+
+
+def finish_setup(instance_dir, world_name, mc_version, loader, owner_uuid, owner_name, copy_mods=True):
+    """Downloads/installs the matching server (vanilla/Fabric: a direct jar
+    download; Forge: running its own installer, since it doesn't publish one), ops
+    the owner if one was whitelisted, and writes eula/server.properties/
+    config.json. Assumes prepare_world already ran.
+
+    copy_mods controls whether the instance's current mods/ folder gets pulled in -
+    only ever passed False for a brand-new world, which isn't "ported" from the
+    instance the way an existing save is, so dragging along whatever mods that
+    instance currently happens to have doesn't make sense the same way.
 
     The owner is always opped when known, not a choice - getting into a whitelisted
     server at all already means they're trusted enough to be there, so there's no
@@ -237,28 +265,11 @@ def finish_setup(instance_dir, world_name, mc_version, loader, owner_uuid, owner
         write_ops(server_dir, owner_uuid, owner_name)
         lines.append(f"Opped {owner_name!r}.")
 
-    jar_path = server_dir / "server.jar"
-    lines.append(f"Downloading {loader} server for Minecraft {mc_version} ...")
-    if loader == "vanilla":
-        server_vanilla.download_server_jar(mc_version, jar_path)
-    else:
-        _, loader_version, installer_version = server_fabric.download_server_jar(mc_version, jar_path)
-        lines.append(f"Fabric loader {loader_version}, installer {installer_version}")
-        mods, skipped_mods = server_fabric.copy_mods(instance_dir, server_dir)
-        if mods:
-            lines.append(f"Copied {len(mods)} mod(s) into the server's mods/ folder.")
-            lines.append(
-                "WARNING: client-only mods (rendering/HUD/etc.) can crash a dedicated server - "
-                "if startup fails, remove them from the mods/ folder and try again."
-            )
-        if skipped_mods:
-            lines.append(
-                f"Skipped {len(skipped_mods)} mod(s) known to be incompatible with a dedicated "
-                f"server (not copied): {', '.join(skipped_mods)}. e4mc specifically crashes the "
-                "server the moment a player joins - MCPersist replaces what it does, so it's not "
-                "needed anyway."
-            )
-
+    # Resolved before the loader-specific block below, not after (as it used to
+    # be) - Forge's installer is itself a jar that has to be run with a real java,
+    # so it needs this settled first. Vanilla/Fabric don't need it this early, but
+    # aren't harmed by it either.
+    #
     # Mojang's own manifest is authoritative and current; the hardcoded table in
     # world.py is a fallback guess for when that lookup isn't available (offline,
     # very old versions) - it goes stale every time a new Minecraft version bumps its
@@ -289,6 +300,38 @@ def finish_setup(instance_dir, world_name, mc_version, loader, owner_uuid, owner
                 f"WARNING: couldn't get Java {required_java} automatically ({e}). Install it yourself "
                 'from https://adoptium.net/, or set "java_path" in config.json.'
             )
+
+    jar_path = server_dir / "server.jar"
+    lines.append(f"Downloading {loader} server for Minecraft {mc_version} ...")
+    if loader == "vanilla":
+        server_vanilla.download_server_jar(mc_version, jar_path)
+    elif loader == "forge":
+        forge_version = server_forge.get_recommended_forge_version(mc_version)
+        installer_path = server_dir / "forge-installer.jar"
+        server_forge.download_installer(mc_version, forge_version, installer_path)
+        lines.append(f"Forge {forge_version} - running its installer ...")
+        java_exe = javacheck.find_java(cfg.get("java_path") or "java")
+        if not java_exe:
+            lines.append(
+                "WARNING: no working Java found, so Forge's installer couldn't run. Install Java "
+                f"{required_java} (https://adoptium.net/) or fix \"java_path\" in config.json, then "
+                "run setup again."
+            )
+        else:
+            server_forge.run_installer(java_exe, installer_path, server_dir)
+            installer_path.unlink(missing_ok=True)
+            if server_forge.find_launch_args_file(server_dir) is None:
+                lines.append(
+                    "WARNING: the installer finished, but this app doesn't recognize the server "
+                    "layout it produced (only modern Forge, 1.17+, is supported) - it may not start."
+                )
+        if copy_mods:
+            _copy_mods_and_report(lines, instance_dir, server_dir)
+    else:
+        _, loader_version, installer_version = server_fabric.download_server_jar(mc_version, jar_path)
+        lines.append(f"Fabric loader {loader_version}, installer {installer_version}")
+        if copy_mods:
+            _copy_mods_and_report(lines, instance_dir, server_dir)
 
     cfg.update(
         {
