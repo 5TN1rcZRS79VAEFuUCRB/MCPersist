@@ -1,4 +1,15 @@
 requests
 nbtlib
 psutil
-PySide6
+# Pinned rather than left floating, for ordinary build reproducibility - so
+# CI (and everyone's local installs) get the same tested Qt build instead of
+# silently picking up whatever's newest each time. Tried this specifically to
+# chase down a real, reproducible native crash (Qt6Core.dll,
+# STATUS_STACK_BUFFER_OVERRUN, after a real Start/Stop cycle, with some delay -
+# not immediate) - confirmed by direct reproduction that pinning to 6.8.3 does
+# NOT fix it; the same crash reproduces identically on this version too, with a
+# real Python 3.12 build matching CI exactly. Root cause still unresolved as of
+# this pin - see the project's own notes/issue tracker for the current state of
+# that investigation, since this comment predates knowing whether it's actually
+# fixed later.
+PySide6==6.8.3
