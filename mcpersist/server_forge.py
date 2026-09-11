@@ -7,6 +7,7 @@ tier of Minecraft version this app already targets elsewhere (see
 world.required_java_major)."""
 
 import subprocess
+import zipfile
 from pathlib import Path
 
 import requests
@@ -32,6 +33,18 @@ def download_installer(mc_version, forge_version, dest_path):
     with open(dest_path, "wb") as f:
         for chunk in resp.iter_content(chunk_size=1 << 16):
             f.write(chunk)
+
+    # Forge's maven doesn't publish a hash to check against, but this installer is
+    # about to be run with java -jar --installServer - same reasoning as the
+    # vanilla sha1 check and the Fabric jar check above: confirm it's actually a
+    # well-formed jar before running it, rather than trusting a plain HTTPS GET
+    # not to have been corrupted/truncated/swapped for an error page in transit.
+    if not zipfile.is_zipfile(dest_path):
+        Path(dest_path).unlink(missing_ok=True)
+        raise ValueError(
+            f"downloaded Forge installer for {mc_version}-{forge_version} isn't a valid jar - not using it"
+        )
+
     return dest_path
 
 

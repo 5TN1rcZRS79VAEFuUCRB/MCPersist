@@ -275,7 +275,13 @@ class StatusPage(QWidget):
             )
             self.update_btn.setVisible(True)
             self.update_btn.setText("Try Again")
-            self.update_btn.setEnabled(bool(result))
+            # Always enabled here, not just when `result` already found an update -
+            # check_latest_release() returns None both when we're genuinely current
+            # AND when the check itself failed (network blip, rate limit), so tying
+            # this to `result` could leave the one recovery button the user needs
+            # disabled for the rest of the session over a transient failure.
+            # on_update_now() re-runs the check itself if nothing's pending yet.
+            self.update_btn.setEnabled(True)
             self.update_details_btn.setVisible(True)
             return
         if not result:
@@ -298,6 +304,14 @@ class StatusPage(QWidget):
 
     def on_update_now(self):
         if not self._pending_update:
+            # Reachable from the failure-recovery banner, where the button stays
+            # enabled even without a pending update (see _on_update_check_done) -
+            # re-run the check itself instead of silently doing nothing.
+            self.update_btn.setEnabled(False)
+            self.update_label.setText("Checking for an update...")
+            self._update_worker = Worker(update_checker.check_latest_release)
+            self._update_worker.finished_result.connect(self._on_update_check_done)
+            self._update_worker.start()
             return
         self.update_btn.setEnabled(False)
         self.update_label.setStyleSheet("color: #2ecc71; font-weight: bold;")
@@ -953,7 +967,11 @@ class SetupPage(QWidget):
         and in the background - switching worlds/modes while it's still loading just
         updates which version gets selected once it finishes."""
         self._pending_version_selection = detected_version
-        if SetupPage._version_list_cache is not None:
+        # Only a non-empty cache counts as "already fetched" - an empty list means
+        # the last attempt failed (list_release_versions() returns [] rather than
+        # raising), and should be retried rather than treated as a permanent result
+        # for the rest of the session.
+        if SetupPage._version_list_cache:
             self._populate_version_combo(SetupPage._version_list_cache)
             return
         if self._version_worker is not None:
@@ -967,8 +985,9 @@ class SetupPage(QWidget):
 
     def _on_version_list_loaded(self, versions):
         self._version_worker = None
-        SetupPage._version_list_cache = versions or []
-        self._populate_version_combo(SetupPage._version_list_cache)
+        if versions:
+            SetupPage._version_list_cache = versions
+        self._populate_version_combo(versions or [])
 
     def _populate_version_combo(self, versions):
         self.mc_version_combo.setEnabled(True)

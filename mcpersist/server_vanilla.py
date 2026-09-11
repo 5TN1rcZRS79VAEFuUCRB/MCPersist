@@ -14,6 +14,12 @@ VERSION_MANIFEST_URL = "https://piston-meta.mojang.com/mc/game/version_manifest_
 # in-process avoids re-downloading the same thing repeatedly for no benefit.
 _manifest_cache = None
 
+# Same reasoning, one level down: a single finish_setup() call fetches one
+# version's own per-version manifest twice (once via required_java_major, again
+# via _get_server_download/download_server_jar) - keyed by version since, unlike
+# the top-level manifest, this is a different URL per Minecraft version.
+_version_meta_cache = {}
+
 
 def _get_manifest():
     global _manifest_cache
@@ -36,11 +42,15 @@ def list_release_versions():
 
 
 def get_version_meta(mc_version):
+    if mc_version in _version_meta_cache:
+        return _version_meta_cache[mc_version]
     manifest = _get_manifest()
     entry = next((v for v in manifest["versions"] if v["id"] == mc_version), None)
     if entry is None:
         raise ValueError(f"Minecraft version {mc_version!r} not found in Mojang's manifest")
-    return requests.get(entry["url"], timeout=30).json()
+    meta = requests.get(entry["url"], timeout=30).json()
+    _version_meta_cache[mc_version] = meta
+    return meta
 
 
 def _get_server_download(mc_version):

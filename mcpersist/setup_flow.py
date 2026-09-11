@@ -153,6 +153,9 @@ def prepare_world(instance_dir, world_name):
     """Copies the world save and detects/whitelists the owner. Split from
     finish_setup so callers can show the detected owner (and ask about cheats) before
     kicking off the slow server-jar download."""
+    if not valid_new_world_name(world_name):
+        return ActionResult(False, [f"{world_name!r} isn't a valid world name."])
+
     save_path = Path(instance_dir) / "saves" / world_name
     server_dir = SERVERS_DIR / world_name
     server_dir.mkdir(parents=True, exist_ok=True)
@@ -196,6 +199,8 @@ def prepare_new_world(instance_dir, world_name, owner_username):
     including the owner can join without it."""
     if not owner_username or not owner_username.strip():
         return ActionResult(False, ["A Minecraft username is required - nobody can join a whitelisted server without one."])
+    if not valid_new_world_name(world_name):
+        return ActionResult(False, [f"{world_name!r} isn't a valid world name."])
 
     server_dir = SERVERS_DIR / world_name
     if server_dir.exists() and any(server_dir.iterdir()):

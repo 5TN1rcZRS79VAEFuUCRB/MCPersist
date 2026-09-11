@@ -7,7 +7,9 @@ the window quits it for real."""
 import ctypes
 import os
 import sys
+from pathlib import Path
 
+import psutil
 from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QApplication, QMainWindow, QStackedWidget
 
@@ -131,8 +133,27 @@ class MainWindow(QMainWindow):
         event.accept()
 
 
+def _gui_actually_running(pid):
+    """process_manager.is_running only confirms *some* process currently has this
+    PID - after the known native crash (which bypasses app.aboutToQuit, so gui.pid
+    never gets cleaned up), Windows reusing that exact PID for any unrelated
+    process would otherwise make a crashed instance look "still running" forever,
+    permanently blocking relaunch with no indication of what actually happened.
+    Confirming the PID's own executable path matches this one closes that gap."""
+    if not process_manager.is_running(pid):
+        return False
+    try:
+        exe = psutil.Process(pid).exe()
+    except psutil.Error:
+        return False
+    try:
+        return Path(exe).resolve() == Path(sys.executable).resolve()
+    except OSError:
+        return False
+
+
 def main():
-    if process_manager.is_running(process_manager.read_pid(GUI_PID_PATH)):
+    if _gui_actually_running(process_manager.read_pid(GUI_PID_PATH)):
         ctypes.windll.user32.MessageBoxW(
             0,
             "MCPersist is already running - check its window (it may be minimized "

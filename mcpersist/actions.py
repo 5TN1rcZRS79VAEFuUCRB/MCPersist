@@ -2,6 +2,7 @@
 so neither duplicates it."""
 
 import json
+import re
 import time
 from dataclasses import dataclass, field
 
@@ -13,6 +14,9 @@ class ActionResult:
     ok: bool
     lines: list = field(default_factory=list)
     data: dict = field(default_factory=dict)
+
+
+VALID_USERNAME_RE = re.compile(r"^[A-Za-z0-9_]{3,16}$")
 
 
 def start_server(cfg, server_dir):
@@ -261,6 +265,11 @@ def add_to_whitelist(cfg, server_dir, username):
     username = username.strip()
     if not username:
         return ActionResult(False, ["Enter a Minecraft username."])
+    if not VALID_USERNAME_RE.match(username):
+        return ActionResult(
+            False,
+            [f"{username!r} isn't a valid Minecraft username (3-16 letters, digits, or underscores)."],
+        )
 
     server_pid = process_manager.read_pid(server_dir / "server.pid")
     if process_manager.is_running(server_pid):

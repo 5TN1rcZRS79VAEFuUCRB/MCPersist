@@ -1,6 +1,10 @@
-requests
-nbtlib
-psutil
+# Pinned for the same reproducibility reason as PySide6 below - requests in
+# particular handles every network call in the app, including the self-updater,
+# so an unreviewed floating version landing silently on a fresh install/CI build
+# is worth avoiding here too, not just for the Qt build.
+requests==2.34.2
+nbtlib==2.0.4
+psutil==7.2.2
 # Pinned rather than left floating, for ordinary build reproducibility - so
 # CI (and everyone's local installs) get the same tested Qt build instead of
 # silently picking up whatever's newest each time. Tried this specifically to
