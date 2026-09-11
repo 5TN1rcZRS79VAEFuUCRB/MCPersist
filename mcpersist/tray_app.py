@@ -65,6 +65,16 @@ class MainWindow(QMainWindow):
         self.setup_page.done.connect(self.back_to_status)
         self.setup_page.cancelled.connect(self.back_to_status)
 
+        # Every later page switch calls fit_to_current_page(), specifically to
+        # remeasure after a deferred tick so word-wrapped labels (Memory/Performance's
+        # detected-specs text, in particular) get their real wrapped height instead of
+        # whatever their first, possibly-premature layout pass computed - but the
+        # very first page shown here never got that treatment, only the fixed
+        # 420x560 above. A word-wrapped label mismeasured on its first-ever layout
+        # pass (a real, common Qt timing quirk, not specific to this app) could end
+        # up visually clipped within whatever height that first pass allocated it.
+        self.fit_to_current_page()
+
     def open_setup(self):
         self.setup_page.reset()
         self.stack.setCurrentWidget(self.setup_page)
