@@ -18,6 +18,20 @@ CONNECT_TIMEOUT = 10
 HANDSHAKE_TIMEOUT = 10  # a client that never finishes its handshake shouldn't hold a connection open forever
 MAX_AUTO_CONNECTIONS_PER_IP = 3
 
+# Two separate abuse patterns, two separate caps:
+#  - MAX_CONNECTIONS_PER_IP guards against one source just opening a lot of raw
+#    sockets (to any of the three ports) and sitting on them - a generous ceiling,
+#    high enough that real multiplayer use (several people behind one NAT/CGNAT
+#    IP joining at once) never gets close to it.
+#  - MAX_PENDING_PER_SUBDOMAIN guards a specific backend from being hammered with
+#    simultaneous fake "connect" attempts, which a flood spread across many source
+#    IPs would otherwise dodge entirely if only MAX_CONNECTIONS_PER_IP existed. It
+#    only counts the brief negotiation window (waiting for that backend's
+#    data_hello), not established sessions, so real concurrent players on one
+#    server are never affected by it.
+MAX_CONNECTIONS_PER_IP = 20
+MAX_PENDING_PER_SUBDOMAIN = 10
+
 # A control connection is only ever recognized as dead by a clean TCP close
 # (reader.readline() returning EOF) - fine for a normal disconnect, but a tunnel
 # client that gets force-killed, crashes, or drops off the network without sending
@@ -35,6 +49,33 @@ PING_TIMEOUT = 45
 clients = {}  # subdomain -> StreamWriter of the control connection
 pending = {}  # connection id -> asyncio.Future resolving to (data_reader, data_writer)
 auto_conn_counts = {}  # source ip -> count of live auto-registered (unreserved) connections
+conn_counts = {}  # source ip -> concurrent raw connections, across control+data+public
+pending_by_subdomain = {}  # subdomain -> count of in-flight (not yet established) connect attempts
+
+
+def _acquire_conn_slot(peer_ip):
+    """Called at the top of every connection handler, for all three ports. Returns
+    False (caller should close immediately) once one source IP is holding too many
+    open sockets at once - a cheap, blunt defense against a raw connection flood,
+    independent of whatever that connection eventually turns out to be (a real
+    player, a registration attempt, or nothing at all)."""
+    if peer_ip is None:
+        return True  # can't identify the source (unusual) - let it through rather than break on it
+    if conn_counts.get(peer_ip, 0) >= MAX_CONNECTIONS_PER_IP:
+        return False
+    conn_counts[peer_ip] = conn_counts.get(peer_ip, 0) + 1
+    return True
+
+
+def _release_conn_slot(peer_ip):
+    if peer_ip is None:
+        return
+    remaining = conn_counts.get(peer_ip, 0) - 1
+    if remaining <= 0:
+        conn_counts.pop(peer_ip, None)
+    else:
+        conn_counts[peer_ip] = remaining
+
 
 ADJECTIVES = [
     "quiet", "brave", "lucky", "sunny", "cozy", "swift", "calm", "bold", "gentle", "merry",
@@ -106,6 +147,9 @@ async def handle_control(reader, writer):
     is_auto = False
     ping_task = None
     peer_ip = (writer.get_extra_info("peername") or (None,))[0]
+    if not _acquire_conn_slot(peer_ip):
+        writer.close()
+        return
     try:
         line = await asyncio.wait_for(reader.readline(), timeout=HANDSHAKE_TIMEOUT)
         if not line:
@@ -157,7 +201,18 @@ async def handle_control(reader, writer):
             if not data:
                 break
             last_seen[0] = time.monotonic()
-    except (asyncio.IncompleteReadError, asyncio.TimeoutError, ConnectionResetError, json.JSONDecodeError):
+    except Exception:
+        # Deliberately broad, not just the handful of exception types a well-behaved
+        # client can trigger (IncompleteReadError/TimeoutError/ConnectionResetError/
+        # JSONDecodeError) - this port is open to the whole internet with no auth
+        # required to reach this point (see is_auto below), so it also has to
+        # survive genuinely malformed input, not just genuine clients disconnecting
+        # oddly. Confirmed as a real gap, not hypothetical: a scanner sending
+        # non-UTF8 bytes here previously hit an uncaught UnicodeDecodeError from
+        # line.decode("utf-8") - harmless (asyncio's own handler logged it and moved
+        # on), but every connection handler in this file should close cleanly on bad
+        # input on its own instead of relying on that fallback, same as handle_data
+        # and handle_public already do.
         pass
     finally:
         if ping_task:
@@ -169,10 +224,21 @@ async def handle_control(reader, writer):
             auto_conn_counts[peer_ip] -= 1
             if auto_conn_counts[peer_ip] <= 0:
                 del auto_conn_counts[peer_ip]
+        _release_conn_slot(peer_ip)
         writer.close()
 
 
 async def handle_data(reader, writer):
+    # Only guards this connection's own brief registration handshake (a few
+    # hundred ms for a real client) - once a data_hello is matched, ownership of
+    # reader/writer passes to whichever handle_public call is waiting on `fut`, so
+    # the slot is freed here rather than tracking the session that follows. Still
+    # closes off the actual risk this cap targets: a source opening many raw
+    # connections here and never completing the handshake.
+    peer_ip = (writer.get_extra_info("peername") or (None,))[0]
+    if not _acquire_conn_slot(peer_ip):
+        writer.close()
+        return
     try:
         line = await asyncio.wait_for(reader.readline(), timeout=HANDSHAKE_TIMEOUT)
         if not line:
@@ -190,6 +256,8 @@ async def handle_data(reader, writer):
         fut.set_result((reader, writer))
     except Exception:
         writer.close()
+    finally:
+        _release_conn_slot(peer_ip)
 
 
 async def pipe(reader, writer):
@@ -208,46 +276,75 @@ async def pipe(reader, writer):
 
 async def handle_public(reader, writer):
     peer = writer.get_extra_info("peername")
+    peer_ip = peer[0] if peer else None
+    # Held for this whole call, including the piped session that follows - a real
+    # player's connection legitimately counts against their source IP's quota here,
+    # same as any other raw socket against this relay.
+    if not _acquire_conn_slot(peer_ip):
+        writer.close()
+        return
+    subdomain = None
+    reserved_pending_slot = False
     try:
-        raw, server_address = await asyncio.wait_for(read_handshake(reader), timeout=HANDSHAKE_TIMEOUT)
-    except Exception:
+        try:
+            raw, server_address = await asyncio.wait_for(read_handshake(reader), timeout=HANDSHAKE_TIMEOUT)
+        except Exception:
+            return
+
+        subdomain = server_address.rstrip(".").split(".")[0].lower()
+        control_writer = clients.get(subdomain)
+        if control_writer is None:
+            print(f"[public] {peer}: no backend registered for {server_address!r}", flush=True)
+            return
+
+        # Only covers the negotiation below (waiting on this specific backend's
+        # data_hello) - deliberately released before piping starts, so this caps how
+        # many simultaneous fake "connect" attempts one subdomain's tunnel client can
+        # be hit with (regardless of how many source IPs they're spread across),
+        # without limiting how many real players it can actually serve at once.
+        if pending_by_subdomain.get(subdomain, 0) >= MAX_PENDING_PER_SUBDOMAIN:
+            print(f"[public] {peer}: too many in-flight connections for {subdomain!r} - dropping", flush=True)
+            return
+        pending_by_subdomain[subdomain] = pending_by_subdomain.get(subdomain, 0) + 1
+        reserved_pending_slot = True
+
+        conn_id = str(uuid.uuid4())
+        fut = asyncio.get_event_loop().create_future()
+        pending[conn_id] = fut
+
+        try:
+            await send_json(control_writer, {"type": "connect", "id": conn_id})
+        except Exception:
+            pending.pop(conn_id, None)
+            return
+
+        try:
+            data_reader, data_writer = await asyncio.wait_for(fut, timeout=CONNECT_TIMEOUT)
+        except asyncio.TimeoutError:
+            pending.pop(conn_id, None)
+            print(f"[public] {peer}: backend for {subdomain!r} didn't respond in time", flush=True)
+            return
+        finally:
+            pending_by_subdomain[subdomain] -= 1
+            if pending_by_subdomain[subdomain] <= 0:
+                del pending_by_subdomain[subdomain]
+            reserved_pending_slot = False
+
+        data_writer.write(raw)
+        await data_writer.drain()
+
+        print(f"[public] {peer} -> {subdomain}", flush=True)
+        await asyncio.gather(
+            pipe(reader, data_writer),
+            pipe(data_reader, writer),
+        )
+    finally:
+        if reserved_pending_slot and subdomain:
+            pending_by_subdomain[subdomain] -= 1
+            if pending_by_subdomain[subdomain] <= 0:
+                del pending_by_subdomain[subdomain]
+        _release_conn_slot(peer_ip)
         writer.close()
-        return
-
-    subdomain = server_address.rstrip(".").split(".")[0].lower()
-    control_writer = clients.get(subdomain)
-    if control_writer is None:
-        print(f"[public] {peer}: no backend registered for {server_address!r}", flush=True)
-        writer.close()
-        return
-
-    conn_id = str(uuid.uuid4())
-    fut = asyncio.get_event_loop().create_future()
-    pending[conn_id] = fut
-
-    try:
-        await send_json(control_writer, {"type": "connect", "id": conn_id})
-    except Exception:
-        pending.pop(conn_id, None)
-        writer.close()
-        return
-
-    try:
-        data_reader, data_writer = await asyncio.wait_for(fut, timeout=CONNECT_TIMEOUT)
-    except asyncio.TimeoutError:
-        pending.pop(conn_id, None)
-        print(f"[public] {peer}: backend for {subdomain!r} didn't respond in time", flush=True)
-        writer.close()
-        return
-
-    data_writer.write(raw)
-    await data_writer.drain()
-
-    print(f"[public] {peer} -> {subdomain}", flush=True)
-    await asyncio.gather(
-        pipe(reader, data_writer),
-        pipe(data_reader, writer),
-    )
 
 
 async def main():
