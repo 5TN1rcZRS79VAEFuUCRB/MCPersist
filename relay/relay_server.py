@@ -6,9 +6,11 @@ the wire protocol and deployment steps."""
 import argparse
 import asyncio
 import json
+import os
 import random
 import time
 import uuid
+from pathlib import Path
 
 from mc_handshake import read_handshake
 from users import load_users, verify
@@ -32,6 +34,29 @@ MAX_AUTO_CONNECTIONS_PER_IP = 3
 MAX_CONNECTIONS_PER_IP = 20
 MAX_PENDING_PER_SUBDOMAIN = 10
 
+# A third, different abuse pattern from the two above: rapid connect/disconnect
+# cycling. Each individual connection can be too brief to ever accumulate against
+# MAX_CONNECTIONS_PER_IP (which only counts *concurrent* sockets), so a source
+# opening and immediately closing connections in a tight loop would sail right
+# through it. This counts attempts over a rolling window instead - same shape as
+# e4mc's own relay, which rate-limits at 30/minute per IP.
+CONN_RATE_WINDOW = 60
+CONN_RATE_LIMIT = 30
+
+# conn_attempts entries only get pruned when that IP makes another attempt - one
+# that stops entirely (routine for scanner/bot traffic, already a confirmed real
+# pattern in this relay's own logs) would otherwise leave a small stale entry in
+# memory forever. Periodic cleanup (see _background_loop) bounds that instead of
+# leaving it unbounded over a long-running process.
+CLEANUP_INTERVAL = 300
+
+# How often _background_loop refreshes the on-disk status snapshot - cheap (a
+# handful of dict lookups + a small JSON write), and gives admin_cli.py's `status`
+# command a near-live view without needing a live connection to the relay process
+# itself.
+STATUS_WRITE_INTERVAL = 10
+STATUS_PATH = Path(__file__).resolve().parent / "relay_status.json"
+
 # A control connection is only ever recognized as dead by a clean TCP close
 # (reader.readline() returning EOF) - fine for a normal disconnect, but a tunnel
 # client that gets force-killed, crashes, or drops off the network without sending
@@ -51,6 +76,7 @@ pending = {}  # connection id -> asyncio.Future resolving to (data_reader, data_
 auto_conn_counts = {}  # source ip -> count of live auto-registered (unreserved) connections
 conn_counts = {}  # source ip -> concurrent raw connections, across control+data+public
 pending_by_subdomain = {}  # subdomain -> count of in-flight (not yet established) connect attempts
+conn_attempts = {}  # source ip -> list of monotonic timestamps of recent connection attempts
 
 
 def _acquire_conn_slot(peer_ip):
@@ -75,6 +101,28 @@ def _release_conn_slot(peer_ip):
         conn_counts.pop(peer_ip, None)
     else:
         conn_counts[peer_ip] = remaining
+
+
+def _rate_limited(peer_ip):
+    """True if this source IP has made too many connection attempts within
+    CONN_RATE_WINDOW - catches a rapid connect/disconnect burst that
+    MAX_CONNECTIONS_PER_IP wouldn't, since a brief connection might never
+    accumulate more than one or two *concurrent* slots no matter how many times
+    it's repeated. Called once per connection attempt (unlike
+    _acquire_conn_slot/_release_conn_slot, there's no matching release - an
+    attempt either counts against the window or it doesn't, permanently, until
+    it ages out)."""
+    if peer_ip is None:
+        return False
+    now = time.monotonic()
+    cutoff = now - CONN_RATE_WINDOW
+    attempts = conn_attempts.setdefault(peer_ip, [])
+    while attempts and attempts[0] < cutoff:
+        attempts.pop(0)
+    if len(attempts) >= CONN_RATE_LIMIT:
+        return True
+    attempts.append(now)
+    return False
 
 
 ADJECTIVES = [
@@ -147,6 +195,9 @@ async def handle_control(reader, writer):
     is_auto = False
     ping_task = None
     peer_ip = (writer.get_extra_info("peername") or (None,))[0]
+    if _rate_limited(peer_ip):
+        writer.close()
+        return
     if not _acquire_conn_slot(peer_ip):
         writer.close()
         return
@@ -236,6 +287,9 @@ async def handle_data(reader, writer):
     # closes off the actual risk this cap targets: a source opening many raw
     # connections here and never completing the handshake.
     peer_ip = (writer.get_extra_info("peername") or (None,))[0]
+    if _rate_limited(peer_ip):
+        writer.close()
+        return
     if not _acquire_conn_slot(peer_ip):
         writer.close()
         return
@@ -277,6 +331,9 @@ async def pipe(reader, writer):
 async def handle_public(reader, writer):
     peer = writer.get_extra_info("peername")
     peer_ip = peer[0] if peer else None
+    if _rate_limited(peer_ip):
+        writer.close()
+        return
     # Held for this whole call, including the piped session that follows - a real
     # player's connection legitimately counts against their source IP's quota here,
     # same as any other raw socket against this relay.
@@ -347,6 +404,40 @@ async def handle_public(reader, writer):
         writer.close()
 
 
+def _write_status_snapshot(start_time):
+    # Write-then-rename, same pattern as users.py/auto_assignments.py - admin_cli.py
+    # reads this file from a completely separate process, so a reader can never see
+    # a half-written snapshot.
+    snapshot = {
+        "updated_at": time.time(),
+        "uptime_seconds": round(time.monotonic() - start_time, 1),
+        "connected_subdomains": sorted(clients.keys()),
+        "concurrent_connections_by_ip": dict(conn_counts),
+    }
+    tmp_path = STATUS_PATH.with_suffix(".json.tmp")
+    tmp_path.write_text(json.dumps(snapshot, indent=2), encoding="utf-8")
+    os.replace(tmp_path, STATUS_PATH)
+
+
+async def _background_loop(start_time):
+    """Runs for the relay's whole lifetime: refreshes the status snapshot on every
+    tick, and sweeps stale conn_attempts entries every CLEANUP_INTERVAL - one task
+    instead of two separate timers, since the status-write cadence is already
+    frequent enough to piggyback the much-less-frequent cleanup on top of."""
+    last_cleanup = time.monotonic()
+    while True:
+        await asyncio.sleep(STATUS_WRITE_INTERVAL)
+        _write_status_snapshot(start_time)
+
+        now = time.monotonic()
+        if now - last_cleanup >= CLEANUP_INTERVAL:
+            last_cleanup = now
+            cutoff = now - CONN_RATE_WINDOW
+            stale = [ip for ip, attempts in conn_attempts.items() if not attempts or attempts[-1] < cutoff]
+            for ip in stale:
+                del conn_attempts[ip]
+
+
 async def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--bind", default="0.0.0.0")
@@ -364,11 +455,16 @@ async def main():
         flush=True,
     )
 
+    start_time = time.monotonic()
+    _write_status_snapshot(start_time)  # so admin_cli.py status has something to read immediately, not just after the first tick
+    background_task = asyncio.create_task(_background_loop(start_time))
+
     async with control_server, data_server, public_server:
         await asyncio.gather(
             control_server.serve_forever(),
             data_server.serve_forever(),
             public_server.serve_forever(),
+            background_task,
         )
 
 

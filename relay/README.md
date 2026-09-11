@@ -32,7 +32,11 @@ Allow inbound TCP on:
 (`MAX_CONNECTIONS_PER_IP`) and simultaneous in-flight join attempts against any one
 backend (`MAX_PENDING_PER_SUBDOMAIN`), so a single source can't flood the relay or
 hammer one person's tunnel client with fake connection attempts - real multiplayer use
-never gets close to either limit. Still no TLS and still no per-user bandwidth caps.
+never gets close to either limit. A separate rolling-window rate limiter
+(`CONN_RATE_LIMIT`, 30 attempts/minute per source IP by default) catches a different
+pattern neither cap does on its own: rapid connect/disconnect cycling, where each
+individual connection is too brief to ever build up against the concurrency caps.
+Still no TLS and still no per-user bandwidth caps.
 
 ## Deploy
 
@@ -65,6 +69,17 @@ configure-relay` on their MCPersist install and paste them in, along with your V
 IP and the ports above.
 
 `remove-user <subdomain>` and `list-users` are also available.
+
+## Checking who's connected right now
+
+```bash
+python3 admin_cli.py status
+```
+
+Reads a status snapshot `relay_server.py` refreshes every ~10s
+(`relay_status.json`, next to the other runtime files) - shows uptime, which
+subdomains are currently registered, and concurrent connection counts by source IP.
+Faster than digging through `journalctl` for "is anyone actually connected."
 
 ## Logs / troubleshooting
 

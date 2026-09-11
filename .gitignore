@@ -2,6 +2,9 @@
 config.json
 relay/users.json
 relay/auto_assignments.json
+# Runtime status snapshot (no secrets - subdomains/IPs/counts only, but still
+# per-deployment runtime state, not something to track)
+relay/relay_status.json
 # The atomic write-then-rename pattern used by all three of the above leaves a
 # same-named *.tmp file holding the exact same secrets until the rename completes -
 # covered here too, not just the final filenames.

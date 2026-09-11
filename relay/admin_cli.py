@@ -1,10 +1,15 @@
 """Operator CLI, run on the relay's VPS, for issuing subdomain+token pairs to relay
-users (add-user/remove-user/list-users)."""
+users (add-user/remove-user/list-users) and checking live status (status)."""
 
 import argparse
+import json
 import secrets
+import time
+from pathlib import Path
 
 from users import add_user, load_users, remove_user
+
+STATUS_PATH = Path(__file__).resolve().parent / "relay_status.json"
 
 
 def cmd_add(args):
@@ -30,6 +35,43 @@ def cmd_list(args):
         print(subdomain)
 
 
+def _format_duration(seconds):
+    seconds = int(seconds)
+    hours, seconds = divmod(seconds, 3600)
+    minutes, seconds = divmod(seconds, 60)
+    if hours:
+        return f"{hours}h {minutes}m"
+    if minutes:
+        return f"{minutes}m {seconds}s"
+    return f"{seconds}s"
+
+
+def cmd_status(args):
+    if not STATUS_PATH.exists():
+        print("No status snapshot yet - is the relay actually running? (it writes one within a few seconds of starting)")
+        return
+    try:
+        data = json.loads(STATUS_PATH.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError) as e:
+        print(f"Couldn't read {STATUS_PATH}: {e}")
+        return
+
+    age = time.time() - data.get("updated_at", 0)
+    print(f"Relay uptime: {_format_duration(data.get('uptime_seconds', 0))} (snapshot is {age:.0f}s old)")
+
+    connected = data.get("connected_subdomains", [])
+    if connected:
+        print(f"Currently connected ({len(connected)}): {', '.join(connected)}")
+    else:
+        print("Currently connected: none")
+
+    by_ip = data.get("concurrent_connections_by_ip", {})
+    if by_ip:
+        print("Concurrent connections by source IP:")
+        for ip, count in sorted(by_ip.items(), key=lambda kv: -kv[1]):
+            print(f"  {ip}: {count}")
+
+
 def main():
     parser = argparse.ArgumentParser(prog="admin_cli")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -43,6 +85,9 @@ def main():
     p_remove.set_defaults(func=cmd_remove)
 
     sub.add_parser("list-users").set_defaults(func=cmd_list)
+    sub.add_parser("status", help="Show live connection status (who's connected right now)").set_defaults(
+        func=cmd_status
+    )
 
     args = parser.parse_args()
     args.func(args)
