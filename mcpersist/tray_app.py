@@ -174,8 +174,34 @@ class MainWindow(QMainWindow):
 
     def quit_app(self):
         self._really_quit = True
+        self._wait_for_pending_workers()
         self.tray.hide()
         QApplication.quit()
+
+    def _wait_for_pending_workers(self):
+        """Nothing here previously stopped a user from clicking Stop and then Quit
+        (tray menu, or closing right after) before that action's background
+        Worker (a QThread) had actually finished - destroying a QThread object
+        while its underlying thread is still running is a real, if narrow, crash
+        risk in its own right, separate from the actual process_manager.py
+        finalizer-timing bug this session traced a real reproducible crash to
+        (see _detached_procs there). Every path to quitting funnels through
+        here, so this is the one place that can confirm nothing is still in
+        flight, rather than every call site remembering to check. Waits up to
+        5s per worker - long enough for a real Stop (RCON + graceful/kill
+        timeouts) or setup step to finish normally, without hanging the quit
+        forever if one is genuinely stuck.
+        """
+        candidates = (
+            getattr(self.status_page, "_worker", None),
+            getattr(self.status_page, "_update_worker", None),
+            getattr(self.status_page, "_update_apply_worker", None),
+            getattr(self.setup_page, "_worker", None),
+            getattr(self.setup_page, "_version_worker", None),
+        )
+        for worker in candidates:
+            if worker is not None and worker.isRunning():
+                worker.wait(5000)
 
     def closeEvent(self, event):
         if self._really_quit:

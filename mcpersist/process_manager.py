@@ -35,6 +35,24 @@ DETACHED_FLAGS = (
 # Java processes a short TEMP/TMP avoids it; harmless for non-Java processes too.
 SHORT_TMP_DIR = Path("C:/mctmp")
 
+# launch_detached() only ever returns proc.pid, so without this the Popen object
+# itself would immediately drop to zero references the instant the function
+# returns - garbage collecting it right there, on whatever thread happened to
+# call this (a background Worker thread, for Start/Stop actions). A Popen that's
+# never had .wait() called on it still holds a live Windows process handle, and
+# its __del__ finalizer running on a background thread while the interpreter
+# starts shutting down (confirmed by direct reproduction: quitting shortly after
+# Stop reliably crashed the process on exit with a native access violation, even
+# after explicitly waiting for the action's QThread to finish first - the crash
+# went away entirely once this stopped happening) is a well-known unsafe
+# combination. These processes are meant to run detached and outlive us anyway
+# (CREATE_BREAKAWAY_FROM_JOB), so keeping every Popen referenced for the rest of
+# this process's own lifetime - never calling .wait() on it, deliberately -
+# means its finalizer simply never runs here at all; the handle it holds gets
+# reclaimed by Windows like any other of our handles when we ourselves exit,
+# same as it would if we'd never wrapped the child in a Popen object at all.
+_detached_procs = []
+
 
 def launch_detached(cmd, cwd, log_path, short_tmp=False):
     log_path = Path(log_path)
@@ -58,6 +76,13 @@ def launch_detached(cmd, cwd, log_path, short_tmp=False):
         close_fds=True,
         env=env,
     )
+    # The child gets its own duplicated handle to the file at Popen() time - our
+    # copy isn't needed for the child to keep writing to it, and leaving it open
+    # just means Python closes it whenever this now out-of-scope file object
+    # happens to get garbage collected, same uncontrolled timing risk as proc
+    # above. Closing it here, deterministically, avoids that entirely.
+    log_file.close()
+    _detached_procs.append(proc)
     return proc.pid
 
 
