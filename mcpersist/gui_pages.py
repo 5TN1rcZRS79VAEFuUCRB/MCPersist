@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QMessageBox,
     QPushButton,
     QRadioButton,
     QSpinBox,
@@ -52,6 +53,17 @@ class StatusPage(QWidget):
         self.update_btn.setFixedWidth(110)
         self.update_btn.clicked.connect(self.on_update_now)
         update_row.addWidget(self.update_btn)
+        # Only shown alongside the failure banner - check_last_update_failure()
+        # already captures the real reason (every step the updater script logged,
+        # or the exact "exited immediately" error from update_checker.apply_update)
+        # but nothing ever surfaced it beyond a generic "it failed" message. Without
+        # this, diagnosing *why* an update failed on someone else's machine meant
+        # asking them to go find a temp log file by hand.
+        self.update_details_btn = QPushButton("Details")
+        self.update_details_btn.setFixedWidth(70)
+        self.update_details_btn.clicked.connect(self.show_update_failure_details)
+        self.update_details_btn.setVisible(False)
+        update_row.addWidget(self.update_details_btn)
         self.update_box.setVisible(False)
         layout.addWidget(self.update_box)
         self._pending_update = None
@@ -251,15 +263,28 @@ class StatusPage(QWidget):
                 "The last update attempt failed partway through and MCPersist had to be "
                 "reopened manually - it's safe to try again."
             )
+            self.update_btn.setVisible(True)
             self.update_btn.setText("Try Again")
             self.update_btn.setEnabled(bool(result))
+            self.update_details_btn.setVisible(True)
             return
         if not result:
             return
         self.update_label.setStyleSheet("color: #2ecc71; font-weight: bold;")
         self.update_label.setText(f"MCPersist {result['version']} is available.")
+        self.update_btn.setVisible(True)
         self.update_btn.setText("Update Now")
+        self.update_details_btn.setVisible(False)
         self.update_box.setVisible(True)
+
+    def show_update_failure_details(self):
+        box = QMessageBox(self)
+        box.setWindowTitle("Update Failure Details")
+        box.setIcon(QMessageBox.Icon.Warning)
+        box.setText("What the last update attempt actually logged, step by step:")
+        box.setDetailedText(self._last_update_failure or "(nothing was logged)")
+        box.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        box.exec()
 
     def on_update_now(self):
         if not self._pending_update:
