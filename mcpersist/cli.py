@@ -81,7 +81,10 @@ def _prompt_world_options():
     generate_structures = (prompt("Generate structures? (y/n)", "y") or "y").strip().lower() != "n"
     spawn_protection = prompt("Spawn protection radius (blocks)", "16")
     try:
-        spawn_protection = str(int(spawn_protection))
+        # Same [0, 500] range the GUI's QSpinBox enforces - a CLI-typed negative or
+        # absurdly large value shouldn't be able to produce a config the GUI path
+        # could never create in the first place.
+        spawn_protection = str(max(0, min(500, int(spawn_protection))))
     except ValueError:
         spawn_protection = "16"
     # A raw newline would inject an extra line into server.properties - keep only

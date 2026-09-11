@@ -79,6 +79,12 @@ conn_counts = {}  # source ip -> concurrent raw connections, across control+data
 pending_by_subdomain = {}  # subdomain -> count of in-flight (not yet established) connect attempts
 conn_attempts = {}  # source ip -> list of monotonic timestamps of recent connection attempts
 
+# Set once in main() before the servers start accepting - handle_control/handle_data
+# do the TLS upgrade themselves (see _upgrade_to_tls) rather than asyncio.start_server
+# doing it via ssl=, specifically so the rate limiter/connection cap run against
+# *every* raw connection attempt, not just ones that complete a valid handshake.
+tls_context = None
+
 
 def _acquire_conn_slot(peer_ip):
     """Called at the top of every connection handler, for all three ports. Returns
@@ -102,6 +108,21 @@ def _release_conn_slot(peer_ip):
         conn_counts.pop(peer_ip, None)
     else:
         conn_counts[peer_ip] = remaining
+
+
+async def _upgrade_to_tls(writer):
+    """Called after the rate-limit/conn-cap checks, not before - see the module-level
+    tls_context comment for why this is done as an explicit in-handler upgrade
+    (writer.start_tls()) rather than asyncio.start_server(..., ssl=...) doing it
+    implicitly. Returns True on success; on failure (garbage/non-TLS input, a
+    mid-handshake disconnect) closes the writer and returns False, same shape as
+    _acquire_conn_slot's caller-checks-and-closes pattern."""
+    try:
+        await writer.start_tls(tls_context)
+        return True
+    except Exception:
+        writer.close()
+        return False
 
 
 def _rate_limited(peer_ip):
@@ -203,6 +224,8 @@ async def handle_control(reader, writer):
         writer.close()
         return
     try:
+        if not await _upgrade_to_tls(writer):
+            return
         line = await asyncio.wait_for(reader.readline(), timeout=HANDSHAKE_TIMEOUT)
         if not line:
             return
@@ -295,6 +318,8 @@ async def handle_data(reader, writer):
         writer.close()
         return
     try:
+        if not await _upgrade_to_tls(writer):
+            return
         line = await asyncio.wait_for(reader.readline(), timeout=HANDSHAKE_TIMEOUT)
         if not line:
             writer.close()
@@ -457,6 +482,7 @@ def _build_tls_context(cert_path, key_path):
 
 
 async def main():
+    global tls_context
     parser = argparse.ArgumentParser()
     parser.add_argument("--bind", default="0.0.0.0")
     parser.add_argument("--control-port", type=int, default=7000)
@@ -473,8 +499,14 @@ async def main():
         )
     tls_context = _build_tls_context(args.tls_cert, args.tls_key)
 
-    control_server = await asyncio.start_server(handle_control, args.bind, args.control_port, ssl=tls_context)
-    data_server = await asyncio.start_server(handle_data, args.bind, args.data_port, ssl=tls_context)
+    # No ssl= here for control/data - handle_control/handle_data do the TLS upgrade
+    # themselves (_upgrade_to_tls), specifically so the rate limiter/connection cap
+    # run against every raw connection attempt, not just ones that complete a valid
+    # handshake (asyncio.start_server(..., ssl=...) would only invoke the callback
+    # after a successful handshake, letting anything that fails one bypass both
+    # protections entirely - confirmed as a real gap, not hypothetical).
+    control_server = await asyncio.start_server(handle_control, args.bind, args.control_port)
+    data_server = await asyncio.start_server(handle_data, args.bind, args.data_port)
     public_server = await asyncio.start_server(handle_public, args.bind, args.public_port)
 
     print(

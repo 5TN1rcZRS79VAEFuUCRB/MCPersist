@@ -18,7 +18,19 @@ ASSIGNED_ADDRESS_PATH = Path("assigned_address.txt")
 # verify a real Let's Encrypt cert, same as any normal HTTPS client. The local
 # connection to the Minecraft server itself (127.0.0.1) is never wrapped - that's
 # plain loopback traffic to a process on this same machine, nothing to encrypt.
-_TLS_CONTEXT = ssl.create_default_context()
+#
+# Built lazily (and cached) rather than at module import time - a failure here (a
+# corrupted or inaccessible certificate store - rare, but real) would otherwise
+# crash the whole process before main()'s own error handling ever gets a chance to
+# print something useful and retry, unlike every other failure mode in this file.
+_tls_context_cache = None
+
+
+def _get_tls_context():
+    global _tls_context_cache
+    if _tls_context_cache is None:
+        _tls_context_cache = ssl.create_default_context()
+    return _tls_context_cache
 
 
 async def pipe(reader, writer):
@@ -38,7 +50,7 @@ async def pipe(reader, writer):
 async def handle_connect(relay_host, data_port, conn_id):
     try:
         data_reader, data_writer = await asyncio.open_connection(
-            relay_host, data_port, ssl=_TLS_CONTEXT, server_hostname=relay_host
+            relay_host, data_port, ssl=_get_tls_context(), server_hostname=relay_host
         )
         data_writer.write((json.dumps({"type": "data_hello", "id": conn_id}) + "\n").encode("utf-8"))
         await data_writer.drain()
@@ -63,7 +75,7 @@ async def run_once(cfg):
     public_domain = cfg.get("public_domain")
 
     reader, writer = await asyncio.open_connection(
-        relay_host, control_port, ssl=_TLS_CONTEXT, server_hostname=relay_host
+        relay_host, control_port, ssl=_get_tls_context(), server_hostname=relay_host
     )
     register_msg = {"type": "register"}
     if subdomain and token:
