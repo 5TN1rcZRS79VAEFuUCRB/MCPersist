@@ -139,7 +139,7 @@ class StatusPage(QWidget):
         # ----- World group -----
         world_box = QGroupBox("World")
         world_layout = QVBoxLayout(world_box)
-        setup_btn = QPushButton("Set Up New World")
+        setup_btn = QPushButton("Set Up a Server")
         setup_btn.clicked.connect(self.go_to_setup.emit)
         world_layout.addWidget(setup_btn)
 
@@ -559,15 +559,47 @@ class SetupPage(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(16, 16, 16, 16)
         layout.setSpacing(14)
-        title = QLabel("Set Up New World")
+        title = QLabel("Set Up a Server")
         title.setStyleSheet("font-weight: bold; font-size: 16px;")
         layout.addWidget(title)
 
-        # Step 1
+        # Step 1 - all three ways to get a server going (pick an existing world,
+        # generate a new one, or switch to one already fully set up) are one
+        # choice on one page, not two disjoint flows - "Switch" used to be its
+        # own separate box below this one, which was exactly backwards from how
+        # someone actually thinks about it ("what am I doing?" is one decision,
+        # not a decision plus a separate afterthought underneath).
         self.step1_box = QGroupBox("1. Get Started")
         step1_layout = QVBoxLayout(self.step1_box)
         step1_layout.setSpacing(10)
 
+        mode_label = QLabel("What do you want to do?")
+        mode_label.setStyleSheet("color: #888;")
+        step1_layout.addWidget(mode_label)
+        mode_col = QVBoxLayout()
+        mode_col.setSpacing(4)
+        self.mode_existing_radio = QRadioButton("Select Existing World")
+        self.mode_new_radio = QRadioButton("Generate New World")
+        self.mode_switch_radio = QRadioButton("Switch to a Previously Set-Up Server")
+        self.mode_existing_radio.setChecked(True)
+        self.mode_group = QButtonGroup(self)
+        self.mode_group.addButton(self.mode_existing_radio)
+        self.mode_group.addButton(self.mode_new_radio)
+        self.mode_group.addButton(self.mode_switch_radio)
+        for radio in (self.mode_existing_radio, self.mode_new_radio, self.mode_switch_radio):
+            radio.toggled.connect(self.on_step1_mode_changed)
+        mode_col.addWidget(self.mode_existing_radio)
+        mode_col.addWidget(self.mode_new_radio)
+        mode_col.addWidget(self.mode_switch_radio)
+        step1_layout.addLayout(mode_col)
+
+        # Existing/New World both need an instance to read from; Switch needs
+        # neither (the world's already fully set up the first time around) - so
+        # this block and the one below it swap places depending on the mode,
+        # instead of the switch fields living in a whole separate box.
+        self.instance_fields_box = QWidget()
+        instance_fields_layout = QVBoxLayout(self.instance_fields_box)
+        instance_fields_layout.setContentsMargins(0, 0, 0, 0)
         self.detected_instances_box = QWidget()
         detected_layout = QVBoxLayout(self.detected_instances_box)
         detected_layout.setContentsMargins(0, 0, 0, 0)
@@ -575,39 +607,36 @@ class SetupPage(QWidget):
         self.detected_instances_combo = QComboBox()
         self.detected_instances_combo.currentIndexChanged.connect(self.on_detected_instance_selected)
         detected_layout.addWidget(self.detected_instances_combo)
-        step1_layout.addWidget(self.detected_instances_box)
+        instance_fields_layout.addWidget(self.detected_instances_box)
         self.detected_instances_box.setVisible(False)
 
-        step1_layout.addWidget(QLabel("Minecraft instance folder"))
+        instance_fields_layout.addWidget(QLabel("Minecraft instance folder"))
         instance_dir_row = QHBoxLayout()
         self.instance_dir_edit = QLineEdit()
         browse_btn = QPushButton("Browse...")
         browse_btn.clicked.connect(self.on_browse_instance_dir)
         instance_dir_row.addWidget(self.instance_dir_edit, 1)
         instance_dir_row.addWidget(browse_btn)
-        step1_layout.addLayout(instance_dir_row)
+        instance_fields_layout.addLayout(instance_dir_row)
+        step1_layout.addWidget(self.instance_fields_box)
 
-        # Which of these two the button below actually needs to do is decided by
-        # the mode, chosen here rather than after a "Find Worlds" step - generating
-        # a new world doesn't need a world list at all (it only needs the instance
-        # dir itself, for loader detection/mod copying), so gating it behind that
-        # button/label made no more sense than the old "Switch" gating did.
-        mode_label = QLabel("What do you want to do?")
-        mode_label.setStyleSheet("color: #888;")
-        step1_layout.addWidget(mode_label)
-        mode_row = QHBoxLayout()
-        mode_row.setSpacing(16)
-        self.mode_existing_radio = QRadioButton("Select Existing World")
-        self.mode_new_radio = QRadioButton("Generate New World")
-        self.mode_existing_radio.setChecked(True)
-        self.mode_group = QButtonGroup(self)
-        self.mode_group.addButton(self.mode_existing_radio)
-        self.mode_group.addButton(self.mode_new_radio)
-        self.mode_existing_radio.toggled.connect(self.on_step1_mode_changed)
-        mode_row.addWidget(self.mode_existing_radio)
-        mode_row.addWidget(self.mode_new_radio)
-        step1_layout.addLayout(mode_row)
+        self.switch_fields_box = QWidget()
+        switch_fields_layout = QVBoxLayout(self.switch_fields_box)
+        switch_fields_layout.setContentsMargins(0, 0, 0, 0)
+        switch_fields_layout.addWidget(QLabel("Server to switch to"))
+        self.switch_world_combo = QComboBox()
+        switch_fields_layout.addWidget(self.switch_world_combo)
+        self.switch_world_msg = QLabel("Switches immediately - no download or setup needed.")
+        self.switch_world_msg.setWordWrap(True)
+        self.switch_world_msg.setStyleSheet("color: #888;")
+        switch_fields_layout.addWidget(self.switch_world_msg)
+        step1_layout.addWidget(self.switch_fields_box)
+        self.switch_fields_box.setVisible(False)
 
+        # One button for all three modes - it relabels itself (Find Worlds /
+        # Continue / Switch) rather than being a fourth separate control, since
+        # there's only ever one meaningful next action for whichever mode is
+        # currently selected.
         self.find_or_continue_btn = QPushButton("Find Worlds")
         self.find_or_continue_btn.setObjectName("primaryButton")
         self.find_or_continue_btn.clicked.connect(self.on_proceed_from_step1)
@@ -617,29 +646,6 @@ class SetupPage(QWidget):
         step1_layout.addWidget(self.step1_msg)
 
         layout.addWidget(self.step1_box)
-
-        # A previously set-up server needs no Minecraft instance at all to switch
-        # to - it was already fully set up the first time around. This used to be
-        # a third option buried behind picking an instance and clicking Find
-        # Worlds first, which made no sense for a mode that doesn't touch either -
-        # it's a fully independent path now, available the moment the wizard
-        # opens, not gated behind the existing/new-world flow above at all. A real
-        # peer QGroupBox instead of a "— or —" divider stuffed inside step 1's
-        # box, so it actually reads as the separate, simpler path it is.
-        self.switch_section = QGroupBox("Switch to a Previous Server")
-        switch_section_layout = QVBoxLayout(self.switch_section)
-        self.switch_world_combo = QComboBox()
-        switch_section_layout.addWidget(self.switch_world_combo)
-        self.switch_world_msg = QLabel("Switches immediately - no download or setup needed.")
-        self.switch_world_msg.setWordWrap(True)
-        self.switch_world_msg.setStyleSheet("color: #888;")
-        switch_section_layout.addWidget(self.switch_world_msg)
-        switch_btn = QPushButton("Switch")
-        switch_btn.setObjectName("primaryButton")
-        switch_btn.clicked.connect(self.on_switch_to_server)
-        switch_section_layout.addWidget(switch_btn)
-        layout.addWidget(self.switch_section)
-        self.switch_section.setVisible(False)
 
         # Step 2 - just shows whichever content step 1's mode choice calls for; it
         # doesn't offer its own mode choice anymore (that already happened above).
@@ -754,14 +760,16 @@ class SetupPage(QWidget):
         self.step1_msg.setText("")
         self.new_world_name_edit.setText("")
         self.owner_username_edit.setText("")
+
+        # "Switch to a Previously Set-Up Server" doesn't need an instance dir at
+        # all - it's ready the moment the wizard opens rather than waiting on
+        # Find Worlds - but the option itself only makes sense, and only shows
+        # up, when there's actually something to switch to.
+        known_servers = self._populate_switch_world_combo()
+        self.mode_switch_radio.setVisible(bool(known_servers))
+
         self.mode_existing_radio.setChecked(True)
         self.on_step1_mode_changed()
-
-        # Independent of everything above - doesn't need an instance dir at all,
-        # so it's ready the moment the wizard opens rather than waiting on Find
-        # Worlds. Hidden entirely when there's nothing to switch to yet.
-        known_servers = self._populate_switch_world_combo()
-        self.switch_section.setVisible(bool(known_servers))
 
         self.step1_box.setVisible(True)
         self.step2_box.setVisible(False)
@@ -781,13 +789,26 @@ class SetupPage(QWidget):
             self.instance_dir_edit.setText(chosen)
 
     def on_step1_mode_changed(self):
-        """Just relabels the step-1 button while still in step 1 - the actual
-        mode-specific work (listing worlds vs. detecting loader info) only happens
-        once it's actually clicked, in on_proceed_from_step1."""
+        """Relabels step 1's single action button and swaps its input fields to
+        match whichever of the three modes is picked - none of the actual work
+        (listing worlds, detecting loader info, switching) happens until it's
+        actually clicked, in on_proceed_from_step1."""
+        is_switch = self.mode_switch_radio.isChecked()
         is_new = self.mode_new_radio.isChecked()
-        self.find_or_continue_btn.setText("Continue" if is_new else "Find Worlds")
+        self.instance_fields_box.setVisible(not is_switch)
+        self.switch_fields_box.setVisible(is_switch)
+        if is_switch:
+            self.find_or_continue_btn.setText("Switch")
+        elif is_new:
+            self.find_or_continue_btn.setText("Continue")
+        else:
+            self.find_or_continue_btn.setText("Find Worlds")
 
     def on_proceed_from_step1(self):
+        if self.mode_switch_radio.isChecked():
+            self.on_switch_to_server()
+            return
+
         instance_dir = self.instance_dir_edit.text()
         result = setup_flow.list_worlds(instance_dir)
         if not result.ok:
@@ -803,7 +824,6 @@ class SetupPage(QWidget):
             self.step1_msg.setText("")
             self.on_mode_changed()
             self.step1_box.setVisible(False)
-            self.switch_section.setVisible(False)
             self.step2_box.setVisible(True)
             self._resize_window_to_fit()
             return
@@ -820,7 +840,6 @@ class SetupPage(QWidget):
         self.world_combo.addItems(worlds)
         self.on_mode_changed()
         self.step1_box.setVisible(False)
-        self.switch_section.setVisible(False)
         self.step2_box.setVisible(True)
         self._resize_window_to_fit()
 
@@ -912,7 +931,6 @@ class SetupPage(QWidget):
         if not world_name:
             return
         self.step1_box.setVisible(False)
-        self.switch_section.setVisible(False)
         self.step4_box.setVisible(True)
         self._resize_window_to_fit()
         self.finish_msg.setText("Switching...")
