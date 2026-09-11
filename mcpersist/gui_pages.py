@@ -159,8 +159,8 @@ class StatusPage(QWidget):
         # world folder is fully self-contained, so this is just a folder copy;
         # "Switch to a Previously Set-Up Server" (in the setup wizard) is what
         # actually makes an imported one active.
-        recover_btn = QPushButton("Recover Previous Worlds...")
-        recover_btn.clicked.connect(self.on_recover_previous_worlds)
+        recover_btn = QPushButton("Recover Worlds from Old Install...")
+        recover_btn.clicked.connect(self.on_recover_from_old_install)
         world_layout.addWidget(recover_btn)
 
         folder_row = QHBoxLayout()
@@ -466,9 +466,9 @@ class StatusPage(QWidget):
         if server_dir is not None:
             _open_folder(server_dir / "logs")
 
-    def on_recover_previous_worlds(self):
+    def on_recover_from_old_install(self):
         folder = QFileDialog.getExistingDirectory(
-            self, "Select the old MCPersist folder (or its \"servers\" folder)"
+            self, "Select the old MCPersist install folder (or its \"servers\" folder)"
         )
         if not folder:
             return
