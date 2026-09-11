@@ -194,8 +194,16 @@ def get_or_assign_subdomain(peer_ip):
 
 
 async def send_json(writer, obj):
+    # drain() only actually blocks once the transport's write buffer backs up -
+    # normally near-instant, but a peer that stops reading (deliberately, or a
+    # zero TCP receive window) can stall it indefinitely, same underlying pattern
+    # as the _upgrade_to_tls timeout fix: every caller here (ping replies,
+    # registration success/error, the connect notification to a backend) would
+    # otherwise hang its connection - and the conn_slot it's still holding - open
+    # forever instead of the caller's own except block ever getting a chance to
+    # clean up.
     writer.write((json.dumps(obj) + "\n").encode("utf-8"))
-    await writer.drain()
+    await asyncio.wait_for(writer.drain(), timeout=HANDSHAKE_TIMEOUT)
 
 
 async def _ping_loop(writer, subdomain, last_seen):
