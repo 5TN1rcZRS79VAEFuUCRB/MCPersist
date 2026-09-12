@@ -22,6 +22,14 @@ from .paths import BASE_DIR
 # already running.
 GUI_PID_PATH = BASE_DIR / "gui.pid"
 
+# The one width the window should normally be. Kept as a constant because
+# fit_to_current_page actively restores it: Qt widens a window when a page's
+# minimum width exceeds the current one and then never shrinks it back, so
+# without restoring it, one wide step of the setup wizard permanently widened the
+# window for the rest of the session - including back on the status page, which
+# needs less. Sized to the status page's own natural minimum (~478px).
+DEFAULT_WIDTH = 480
+
 
 class SizedStackedWidget(QStackedWidget):
     """A QStackedWidget sizes itself to fit the LARGEST page it holds, by
@@ -51,7 +59,7 @@ class MainWindow(QMainWindow):
         # can't lay them out without cramming - confirmed by direct measurement
         # (StatusPage.sizeHint().width() == 478 well before this session's other
         # changes, so this wasn't something the scroll-area fix introduced).
-        self.resize(480, 560)
+        self.resize(DEFAULT_WIDTH, 560)
         # A long unbroken status message (a full file path with no spaces to wrap
         # at, say) can otherwise force the window to stretch far wider than
         # intended to fit it on one line, and Qt doesn't shrink it back down again
@@ -107,8 +115,27 @@ class MainWindow(QMainWindow):
 
         def resize_to_fit():
             self.stack.updateGeometry()
+            # Recompute the cached layout minimum BEFORE resizing. Qt clamps a
+            # resize up to the window's current minimum, and that minimum is
+            # cached - so if the page just became narrower, the resize below would
+            # be clamped to the stale, wider value and the window would stay wide
+            # with nothing resizing it again. Confirmed by direct measurement:
+            # without this, removing an over-wide widget left the window at its
+            # old width even though the constraint had already dropped back.
+            if self.layout() is not None:
+                self.layout().invalidate()
+                self.layout().activate()
             target_height = max(300, min(780, page.sizeHint().height() + 24))
-            self.resize(self.width(), target_height)
+            # Width is restored, not merely preserved. Passing self.width() through
+            # (what this used to do) meant any page that had once forced the window
+            # wider left it wider forever, since Qt won't shrink it back on its own
+            # - so the window's width silently depended on which screens you'd
+            # visited. Going back to DEFAULT_WIDTH each time makes it a function of
+            # the page you're on instead. The max() is because Qt enforces the
+            # page's minimum anyway: a page that genuinely needs more still gets it,
+            # rather than being cramped.
+            target_width = max(DEFAULT_WIDTH, page.minimumSizeHint().width())
+            self.resize(target_width, target_height)
 
         QTimer.singleShot(0, resize_to_fit)
 

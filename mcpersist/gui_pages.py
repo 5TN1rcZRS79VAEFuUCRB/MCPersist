@@ -818,7 +818,17 @@ class SetupPage(QWidget):
         new_layout.addWidget(QLabel("New world name"))
         self.new_world_name_edit = QLineEdit()
         new_layout.addWidget(self.new_world_name_edit)
-        new_layout.addWidget(QLabel("Your Minecraft username (required - the whitelist means nobody, including you, can join without it)"))
+        # Word-wrapped, like every other long label here. Without it this one line
+        # of text reported a ~526px minimum width, which QMainWindow enforces as
+        # the window's own minimum - so reaching this step yanked the whole window
+        # 100px wider and (since Qt never shrinks a window back) left it that way
+        # for the rest of the session, including back on the status page.
+        owner_username_label = QLabel(
+            "Your Minecraft username (required - the whitelist means nobody, including you, "
+            "can join without it)"
+        )
+        owner_username_label.setWordWrap(True)
+        new_layout.addWidget(owner_username_label)
         self.owner_username_edit = QLineEdit()
         new_layout.addWidget(self.owner_username_edit)
 
