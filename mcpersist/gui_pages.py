@@ -605,8 +605,16 @@ class StatusPage(QWidget):
         cfg["memory_auto"] = is_auto
         cfg["memory_mb"] = chosen_gb * 1024
         config.save(cfg)
+        # exists(), not just "a world name is set" - config.server_dir() only joins
+        # the name onto servers/ without checking anything is there. If the folder
+        # has gone (deleted by hand to free space, say), write_world_meta raised
+        # FileNotFoundError out of this slot AFTER config.save had already written:
+        # Qt swallowed it, so the setting was saved but the "Saved." message below
+        # never ran and the button looked like it did nothing. The saved config is
+        # what actually drives the next start, so skipping the per-world snapshot
+        # here is the right outcome, not an error worth bothering the user with.
         server_dir = config.server_dir(cfg)
-        if server_dir:
+        if server_dir and server_dir.exists():
             setup_flow.write_world_meta(server_dir, cfg)
 
         if is_auto:
@@ -662,7 +670,7 @@ class StatusPage(QWidget):
         cfg["simulation_distance"] = chosen_sim
         config.save(cfg)
         server_dir = config.server_dir(cfg)
-        if server_dir:
+        if server_dir and server_dir.exists():  # see on_save_ram
             setup_flow.write_world_meta(server_dir, cfg)
 
         if is_auto:
@@ -1269,6 +1277,8 @@ class SetupPage(QWidget):
         self.finish_btn.setEnabled(True)
 
     def _on_switch_done(self, result):
+        if self.sender() is not self._worker:  # see _on_finish_done
+            return
         if isinstance(result, WorkerError):
             self.finish_msg.setText(f"Failed: {result.message}")
             return
@@ -1309,6 +1319,15 @@ class SetupPage(QWidget):
         self._worker.start()
 
     def _on_finish_done(self, result):
+        # Same staleness guard as _on_prepare_done, and it matters more here:
+        # finish_setup is the longest step (Java plus a server-jar download, minutes
+        # on a slow connection) and Cancel stays available throughout. Without
+        # this, cancelling world A's finish and starting the wizard again for world
+        # B would have A's worker eventually report into B's wizard - hiding step 3,
+        # showing "4. Done" with A's success text, and leaving the user believing B
+        # was set up while config.json actually points at A.
+        if self.sender() is not self._worker:
+            return
         self.finish_btn.setEnabled(True)
         self.finish_btn.setText("Finish Setup")
         if isinstance(result, WorkerError):

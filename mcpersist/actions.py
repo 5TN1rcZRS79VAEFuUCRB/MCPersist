@@ -2,6 +2,7 @@
 so neither duplicates it."""
 
 import json
+import os
 import re
 import time
 from dataclasses import dataclass, field
@@ -290,13 +291,56 @@ def add_to_whitelist(cfg, server_dir, username):
 
     wl_path = server_dir / "whitelist.json"
     entries = []
+    notes = []
     if wl_path.exists():
         try:
-            entries = json.loads(wl_path.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError):
+            raw = wl_path.read_text(encoding="utf-8")
+        except OSError as e:
+            # Refused rather than treated as empty. The file is RIGHT THERE and we
+            # just can't read it this instant (antivirus or a cloud-sync agent
+            # holding it, a sharing violation) - that says nothing about it being
+            # empty. Falling back to [] here would rewrite the file containing only
+            # the new player, silently deleting everyone already whitelisted, and
+            # report success while doing it.
+            return ActionResult(
+                False,
+                [
+                    f"Couldn't read {wl_path.name} ({e}) - not touching it, since overwriting it "
+                    "would remove everyone already whitelisted. Close anything that might have the "
+                    "file open and try again.",
+                ],
+            )
+        try:
+            entries = json.loads(raw)
+        except json.JSONDecodeError:
+            entries = None
+        # Valid JSON isn't necessarily the list-of-objects Minecraft expects; a
+        # stray "{}" would otherwise blow up on the .get() below.
+        if not isinstance(entries, list):
+            # A genuinely corrupt file does have to be replaced - Minecraft can't
+            # read it either - but the old contents are kept alongside instead of
+            # being thrown away, and the user is told rather than left to discover
+            # later that the list is shorter than it was.
+            salvage = wl_path.with_name(f"whitelist.json.corrupt-{time.strftime('%Y%m%d-%H%M%S')}")
+            try:
+                wl_path.replace(salvage)
+                notes.append(
+                    f"{wl_path.name} wasn't readable as a whitelist, so it was set aside as "
+                    f"{salvage.name} and a fresh one started - any players it listed need re-adding."
+                )
+            except OSError as e:
+                return ActionResult(False, [f"{wl_path.name} is unreadable and couldn't be set aside ({e})."])
             entries = []
-    if any(e.get("uuid") == uuid for e in entries):
+    if any(isinstance(e, dict) and e.get("uuid") == uuid for e in entries):
         return ActionResult(True, [f"{name!r} is already whitelisted."])
     entries.append({"uuid": uuid, "name": name})
-    wl_path.write_text(json.dumps(entries, indent=2), encoding="utf-8")
-    return ActionResult(True, [f"Added {name!r} to the whitelist (server isn't running - takes effect on next start)."])
+    # Write-then-rename, like config.py/users.py/auto_assignments.py: a crash or
+    # power loss partway through a direct write is exactly what produces the
+    # truncated file the corruption branch above has to deal with.
+    tmp_path = wl_path.with_suffix(".json.tmp")
+    tmp_path.write_text(json.dumps(entries, indent=2), encoding="utf-8")
+    os.replace(tmp_path, wl_path)
+    return ActionResult(
+        True,
+        notes + [f"Added {name!r} to the whitelist (server isn't running - takes effect on next start)."],
+    )
