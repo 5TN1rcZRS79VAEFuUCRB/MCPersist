@@ -310,6 +310,23 @@ class StatusPage(QWidget):
         self._update_worker.finished_result.connect(self._on_update_check_done)
         self._update_worker.start()
 
+    def _resize_window_to_fit(self):
+        """Showing, hiding or re-wording the update banner changes how tall this
+        page's content is, but nothing was re-measuring the window afterwards - so
+        the extra height spilled past the window and the scroll area (added so tall
+        content is scrollable rather than clipped) put a scrollbar on the status
+        page just for displaying an update message. Re-fitting grows the window
+        those few pixels instead. Same helper SetupPage uses for its step
+        transitions, and guarded the same way since this page can be driven
+        standalone in tests."""
+        window = self.window()
+        if hasattr(window, "fit_to_current_page"):
+            window.fit_to_current_page()
+
+    def _hide_update_box(self):
+        self.update_box.setVisible(False)
+        self._resize_window_to_fit()
+
     def _on_update_check_done(self, result):
         self._pending_update = result
         if self._just_updated_to:
@@ -317,7 +334,8 @@ class StatusPage(QWidget):
             self.update_label.setStyleSheet("color: #2ecc71; font-weight: bold;")
             self.update_label.setText(f"Updated to {self._just_updated_to} - all set.")
             self.update_btn.setVisible(False)
-            QTimer.singleShot(8000, lambda: self.update_box.setVisible(False))
+            self._resize_window_to_fit()
+            QTimer.singleShot(8000, self._hide_update_box)
             return
         if self._last_update_failure:
             self.update_box.setVisible(True)
@@ -336,6 +354,7 @@ class StatusPage(QWidget):
             # on_update_now() re-runs the check itself if nothing's pending yet.
             self.update_btn.setEnabled(True)
             self.update_details_btn.setVisible(True)
+            self._resize_window_to_fit()
             return
         if not result:
             return
@@ -345,6 +364,7 @@ class StatusPage(QWidget):
         self.update_btn.setText("Update Now")
         self.update_details_btn.setVisible(False)
         self.update_box.setVisible(True)
+        self._resize_window_to_fit()
 
     def show_update_failure_details(self):
         box = QMessageBox(self)
@@ -356,12 +376,46 @@ class StatusPage(QWidget):
         box.exec()
 
     def on_update_now(self):
+        # Refused while the server or tunnel is up, and this is not a nicety: the
+        # tunnel client is a detached re-invocation of MCPersist.exe ITSELF (see
+        # tunnel_relay.py - sys.executable with a sentinel flag), and it
+        # deliberately outlives the GUI. So it holds the .exe and the loaded
+        # _internal DLLs open with writes denied for as long as it runs.
+        #
+        # The updater's Copy-Item is not atomic and not all-or-nothing: it copies
+        # files until it reaches the locked ones, then fails, leaving new _internal
+        # files beside the old exe - the classic PyInstaller won't-launch state. Its
+        # ten retries can't help, because the lock isn't transient the way an
+        # antivirus handle is; it lasts as long as the tunnel. And it would then
+        # report "old install left in place", which by that point isn't true.
+        #
+        # Stopping it automatically would be worse - a persistent server is the
+        # entire point of this app, so quietly killing someone's running world to
+        # install an update isn't ours to decide.
+        #
+        # Only the tunnel is checked, deliberately. The Minecraft server is java.exe
+        # and holds nothing of ours open, so an update with just the server up is
+        # genuinely safe: the GUI quits, the detached server keeps running exactly
+        # as it's designed to, and the relaunched app picks it back up from its pid
+        # file. Blocking that too would refuse a safe update and, worse, would have
+        # to give a reason that isn't true.
+        st, _, _ = self.current_status()
+        if st and st["tunnel_running"]:
+            self.update_label.setStyleSheet("color: #b45309; font-weight: bold;")
+            self.update_label.setText(
+                "Stop the tunnel first, then update - the tunnel runs MCPersist.exe itself, "
+                "so it holds the file the update needs to replace."
+            )
+            self.update_btn.setEnabled(True)
+            self._resize_window_to_fit()
+            return
         if not self._pending_update:
             # Reachable from the failure-recovery banner, where the button stays
             # enabled even without a pending update (see _on_update_check_done) -
             # re-run the check itself instead of silently doing nothing.
             self.update_btn.setEnabled(False)
             self.update_label.setText("Checking for an update...")
+            self._resize_window_to_fit()
             self._update_worker = Worker(update_checker.check_latest_release)
             self._update_worker.finished_result.connect(self._on_update_check_done)
             self._update_worker.start()
@@ -369,6 +423,7 @@ class StatusPage(QWidget):
         self.update_btn.setEnabled(False)
         self.update_label.setStyleSheet("color: #2ecc71; font-weight: bold;")
         self.update_label.setText("Downloading update...")
+        self._resize_window_to_fit()
         self._update_apply_worker = Worker(update_checker.apply_update, self._pending_update["download_url"])
         self._update_apply_worker.finished_result.connect(self._on_update_applied)
         self._update_apply_worker.start()
@@ -378,6 +433,7 @@ class StatusPage(QWidget):
             self.update_btn.setEnabled(True)
             self.update_label.setStyleSheet("color: #e74c3c; font-weight: bold;")
             self.update_label.setText(f"Update failed: {result.message}")
+            self._resize_window_to_fit()
             return
         target_version = self._pending_update["version"]
         update_checker.mark_update_pending(target_version)
@@ -385,6 +441,10 @@ class StatusPage(QWidget):
             f"Updated to {target_version} - the window will close and reopen automatically "
             "in a moment. This is expected, not a crash."
         )
+        # This one is two lines of text, so it's the most likely of all of them to
+        # need the extra height - and it's the message the user actually sits and
+        # reads while the app closes itself.
+        self._resize_window_to_fit()
         window = self.window()
         # Without this, quit_app() below fires in the same instant as the label
         # change above, so the label is never actually seen - the whole update
