@@ -140,6 +140,10 @@ class MainWindow(QMainWindow):
             getattr(self.status_page, "_recover_worker", None),
             getattr(self.setup_page, "_worker", None),
             getattr(self.setup_page, "_version_worker", None),
+            # Runs the user abandoned by re-entering the wizard, which can still be
+            # copying a world (see SetupPage.reset) - they're exactly the ones worth
+            # waiting on, since quitting mid-copy is what leaves a half-copied world.
+            *getattr(self.setup_page, "_stale_workers", ()),
         )
         for worker in candidates:
             if worker is not None and worker.isRunning():

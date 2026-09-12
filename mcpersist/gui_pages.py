@@ -686,6 +686,12 @@ class SetupPage(QWidget):
     def __init__(self):
         super().__init__()
         self._worker = None
+        # Workers from abandoned runs that were still going when the wizard was
+        # re-entered. They're parked here rather than dropped so they stay both
+        # referenced (destroying a QThread while its thread runs is its own crash
+        # risk) and visible to MainWindow._wait_for_pending_workers, which is what
+        # stops the app quitting mid-copy. See reset().
+        self._stale_workers = []
         self.instance_dir = None
         self.world_name = None
         self.mc_version = None
@@ -968,6 +974,16 @@ class SetupPage(QWidget):
         self.owner_uuid = None
         self.owner_name = None
         self.is_new_world = False
+        # Parked, not dropped. _worker being reassigned is what makes
+        # _on_prepare_done ignore an abandoned run's late result, but simply
+        # setting it to None would have thrown away the last reference to a
+        # QThread that may still be copying a world - hiding it from
+        # _wait_for_pending_workers (so quitting no longer waits for it, leaving a
+        # half-copied world behind) and risking it being finalized mid-run.
+        if self._worker is not None and self._worker.isRunning():
+            self._stale_workers.append(self._worker)
+        # Anything already finished can be forgotten, so this doesn't grow forever.
+        self._stale_workers = [w for w in self._stale_workers if w.isRunning()]
         self._worker = None
         self.prepare_msg.setText("")
         self.finish_msg.setText("")
@@ -998,22 +1014,11 @@ class SetupPage(QWidget):
         actually clicked, in on_proceed_from_step1."""
         is_switch = self.mode_switch_radio.isChecked()
         is_new = self.mode_new_radio.isChecked()
-        self.instance_fields_box.setVisible(not is_switch)
+        # Shown only when there's an existing save to go and find. A brand-new
+        # world doesn't come from an instance at all (see on_proceed_from_step1),
+        # and switching to an already-set-up world doesn't need one either.
+        self.instance_fields_box.setVisible(not is_switch and not is_new)
         self.switch_fields_box.setVisible(is_switch)
-        # A brand-new world has no save to go looking for, so in that mode the
-        # instance isn't being asked for as "where your worlds are" - it's the only
-        # thing that says which Minecraft version and mod loader the new server
-        # should be built as (see detect_new_world_info). Same widgets, genuinely
-        # different question, so they say which one they're asking.
-        if is_new:
-            self.detected_instances_label.setText("Match a detected Minecraft instance (optional)")
-            self.instance_dir_label.setText(
-                "Minecraft instance (optional) - only suggests the version and loader, "
-                "which you pick next. Leave blank to choose them yourself."
-            )
-        else:
-            self.detected_instances_label.setText("Detected Minecraft instances")
-            self.instance_dir_label.setText("Minecraft instance folder - where your worlds are")
         if is_switch:
             self.find_or_continue_btn.setText("Switch")
         elif is_new:
@@ -1026,32 +1031,29 @@ class SetupPage(QWidget):
             self.on_switch_to_server()
             return
 
-        instance_dir = self.instance_dir_edit.text()
-        is_new = self.mode_new_radio.isChecked()
-        result = setup_flow.list_worlds(instance_dir)
-        # Only a hard requirement when there's an existing save to go and find.
-        # A brand-new world genuinely doesn't need one: prepare_new_world ignores
-        # instance_dir entirely, mods aren't copied (copy_mods=False), and the
-        # version/loader it would suggest are both picked outright in step 2
-        # anyway. Blocking here meant you couldn't create a fresh server at all on
-        # a machine with no Minecraft instance - a dedicated box, or a launcher
-        # install with no worlds in it - despite nothing from it being used.
-        if not result.ok and not is_new:
-            self.step1_msg.setText("\n".join(result.lines))
-            return
-        # Kept only if it actually resolved, so detect_new_world_info is never
-        # handed a path that doesn't exist.
-        self.instance_dir = instance_dir if result.ok else ""
-
-        if is_new:
-            # Nothing further to check - the worlds list was never relevant here,
-            # and the instance dir is optional.
+        if self.mode_new_radio.isChecked():
+            # A brand-new world has no relationship to any Minecraft instance at
+            # all, so there's nothing to ask for here: prepare_new_world ignores
+            # instance_dir, mods deliberately aren't copied into a new world
+            # (copy_mods=False), and the version and mod loader are both chosen
+            # outright on the very next screen. The instance could only ever have
+            # pre-ticked those two controls, which is no saving once they're
+            # sitting right there - so the fields aren't shown for this mode and
+            # nothing is read from them.
+            self.instance_dir = ""
             self.step1_msg.setText("")
             self.on_mode_changed()
             self.step1_box.setVisible(False)
             self.step2_box.setVisible(True)
             self._resize_window_to_fit()
             return
+
+        instance_dir = self.instance_dir_edit.text()
+        result = setup_flow.list_worlds(instance_dir)
+        if not result.ok:
+            self.step1_msg.setText("\n".join(result.lines))
+            return
+        self.instance_dir = instance_dir
 
         worlds = result.data["worlds"]
         if not worlds:
@@ -1077,9 +1079,20 @@ class SetupPage(QWidget):
 
         if is_existing:
             self.on_world_selected(self.world_combo.currentText())
-        elif is_new and self.instance_dir:
-            info = setup_flow.detect_new_world_info(self.instance_dir)
-            self._apply_detected_loader(info)
+        elif is_new:
+            # _select_version is what populates the version dropdown (and kicks off
+            # the one-time fetch of Mojang's manifest), so this has to run
+            # unconditionally for a new world. It used to be guarded on having an
+            # instance to detect from, which left the dropdown completely EMPTY for
+            # anyone generating a world without one - and then Continue reported
+            # "Still loading the version list" forever, because nothing was ever
+            # loading. Passing None just means "no particular version preselected",
+            # which leaves the newest release selected (the list is newest-first) -
+            # a better default for a brand-new world than matching some old
+            # instance anyway.
+            self._select_version(None)
+            self.vanilla_radio.setChecked(True)
+            self.loader_warning.setText("")
 
     def _populate_switch_world_combo(self):
         """Returns the known-servers list too, so reset() doesn't need a second,

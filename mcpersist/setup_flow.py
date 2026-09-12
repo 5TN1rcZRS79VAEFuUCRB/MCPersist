@@ -528,10 +528,16 @@ def import_worlds_from(source_root):
     if source_servers == SERVERS_DIR.resolve():
         return ActionResult(False, ["That's already this install's own servers folder - nothing to import."])
 
+    # Dot-prefixed dirs are skipped for the same reason list_known_servers skips
+    # them: a ".importing-<name>" left behind by an interrupted import in the
+    # SOURCE install is a partial copy, not a world. Importing one would also
+    # shadow the real thing - it sorts before the actual name, so it'd be copied
+    # and then deleted again by the staging cleanup for the real world, while
+    # still being counted as imported.
     candidates = [
         entry
         for entry in sorted(source_servers.iterdir())
-        if entry.is_dir() and (entry / "mcpersist_meta.json").exists()
+        if entry.is_dir() and not entry.name.startswith(".") and (entry / "mcpersist_meta.json").exists()
     ] if source_servers.is_dir() else []
 
     if not candidates:
