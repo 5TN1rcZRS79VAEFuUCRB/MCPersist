@@ -1006,9 +1006,10 @@ class SetupPage(QWidget):
         # should be built as (see detect_new_world_info). Same widgets, genuinely
         # different question, so they say which one they're asking.
         if is_new:
-            self.detected_instances_label.setText("Match a detected Minecraft instance")
+            self.detected_instances_label.setText("Match a detected Minecraft instance (optional)")
             self.instance_dir_label.setText(
-                "Minecraft instance to match - sets the new server's version and mod loader"
+                "Minecraft instance (optional) - only suggests the version and loader, "
+                "which you pick next. Leave blank to choose them yourself."
             )
         else:
             self.detected_instances_label.setText("Detected Minecraft instances")
@@ -1026,17 +1027,25 @@ class SetupPage(QWidget):
             return
 
         instance_dir = self.instance_dir_edit.text()
+        is_new = self.mode_new_radio.isChecked()
         result = setup_flow.list_worlds(instance_dir)
-        if not result.ok:
+        # Only a hard requirement when there's an existing save to go and find.
+        # A brand-new world genuinely doesn't need one: prepare_new_world ignores
+        # instance_dir entirely, mods aren't copied (copy_mods=False), and the
+        # version/loader it would suggest are both picked outright in step 2
+        # anyway. Blocking here meant you couldn't create a fresh server at all on
+        # a machine with no Minecraft instance - a dedicated box, or a launcher
+        # install with no worlds in it - despite nothing from it being used.
+        if not result.ok and not is_new:
             self.step1_msg.setText("\n".join(result.lines))
             return
-        self.instance_dir = instance_dir
+        # Kept only if it actually resolved, so detect_new_world_info is never
+        # handed a path that doesn't exist.
+        self.instance_dir = instance_dir if result.ok else ""
 
-        if self.mode_new_radio.isChecked():
-            # Generating a new world never needed the worlds list at all - only the
-            # instance dir itself, for loader detection/mod copying later - so
-            # there's nothing further to check here now that the dir's confirmed
-            # to exist.
+        if is_new:
+            # Nothing further to check - the worlds list was never relevant here,
+            # and the instance dir is optional.
             self.step1_msg.setText("")
             self.on_mode_changed()
             self.step1_box.setVisible(False)
