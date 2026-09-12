@@ -28,6 +28,7 @@ from PySide6.QtGui import QGuiApplication
 from . import actions, config, server_vanilla, setup_flow, update_checker
 from .gui_worker import Worker, WorkerError
 from .paths import BASE_DIR
+from .version import VERSION
 
 
 def _open_folder(path):
@@ -152,6 +153,11 @@ class StatusPage(QWidget):
         addr_row.addWidget(self.address_label, 1)
         addr_row.addWidget(copy_btn)
         status_layout.addLayout(addr_row)
+        self.address_hint = QLabel("")
+        self.address_hint.setWordWrap(True)
+        self.address_hint.setStyleSheet("color: #b45309;")
+        self.address_hint.setVisible(False)
+        status_layout.addWidget(self.address_hint)
 
         # Whitelist doesn't get its own section - it's just a status/warning, not
         # something with its own actions to take (management is real Minecraft
@@ -284,6 +290,10 @@ class StatusPage(QWidget):
         layout.addWidget(perf_box)
 
         layout.addStretch()
+        version_label = QLabel(f"MCPersist v{VERSION}")
+        version_label.setStyleSheet("color: #888;")
+        version_label.setAlignment(Qt.AlignRight)
+        layout.addWidget(version_label)
 
         self.init_ram_controls()
         self.init_perf_controls()
@@ -477,6 +487,8 @@ class StatusPage(QWidget):
             self.whitelist_label.setText("Whitelist: -")
             self.whitelist_warning.setText("")
             self.address_label.setText("-")
+            self.address_hint.setVisible(False)
+            self.address_hint.setText("")
             self.start_btn.setEnabled(False)
             self.stop_btn.setEnabled(False)
             self.restart_btn.setEnabled(False)
@@ -486,6 +498,21 @@ class StatusPage(QWidget):
         self._set_state_label(self.server_label, "Server", st["server_running"])
         self._set_state_label(self.tunnel_label, "Tunnel", st["tunnel_running"])
         self.address_label.setText(st["join_address"] or "(not assigned yet)")
+        if st["join_address"]:
+            hint = ""
+        elif not st["tunnel_running"]:
+            hint = "Your address is assigned once the tunnel is running - press Start."
+        elif st.get("tunnel_problem"):
+            hint = (
+                f"Can't reach the relay: {st['tunnel_problem']}\n"
+                "If this keeps happening, a firewall or antivirus may be blocking MCPersist.exe."
+            )
+        else:
+            hint = "Connecting to the relay..."
+        if hint != self.address_hint.text():
+            self.address_hint.setText(hint)
+            self.address_hint.setVisible(bool(hint))
+            self._resize_window_to_fit()
 
         name_count = len(st["whitelist_names"])
         if st["whitelist_enabled"] is None:

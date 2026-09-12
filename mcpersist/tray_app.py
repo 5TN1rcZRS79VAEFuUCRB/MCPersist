@@ -16,6 +16,7 @@ from PySide6.QtWidgets import QApplication, QMainWindow, QStackedWidget
 from . import process_manager
 from .gui_pages import SetupPage, StatusPage
 from .paths import BASE_DIR
+from .version import VERSION
 
 # Prevents a second instance racing the first to start the server (or just
 # showing stale/conflicting state) if the .exe gets double-clicked again while
@@ -51,7 +52,7 @@ class SizedStackedWidget(QStackedWidget):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("MCPersist")
+        self.setWindowTitle(f"MCPersist v{VERSION}")
         # 420 used to be enough, but the status page's own natural (minimum) width
         # is now ~478px - the World section's 3-button folder row and the
         # Memory/Performance Save-button rows don't have room to shrink any

@@ -236,6 +236,29 @@ def get_whitelist_info(server_dir):
     return enabled, names
 
 
+_TUNNEL_ERROR_MARKERS = ("connection error", "registration failed", "closed the connection", "control connection closed")
+
+
+def tunnel_log_problem(server_dir):
+    """The tunnel's most recent line if it's a failure, so "no address yet" can say
+    why (relay unreachable, registration refused) instead of leaving the user to
+    guess - a firewall or antivirus blocking the tunnel looks identical otherwise."""
+    log_path = server_dir / "logs" / "tunnel.out.log"
+    try:
+        with open(log_path, "rb") as f:
+            f.seek(0, 2)
+            f.seek(max(0, f.tell() - 4096))
+            lines = f.read().decode("utf-8", "replace").splitlines()
+    except OSError:
+        return None
+    for line in reversed(lines):
+        line = line.strip()
+        if not line or line.startswith("reconnecting in"):
+            continue
+        return line if any(m in line for m in _TUNNEL_ERROR_MARKERS) else None
+    return None
+
+
 def get_status(cfg, server_dir):
     server_pid = process_manager.read_pid(server_dir / "server.pid")
     tunnel_pid = process_manager.read_pid(server_dir / "tunnel.pid")
@@ -248,13 +271,15 @@ def get_status(cfg, server_dir):
 
     whitelist_enabled, whitelist_names = get_whitelist_info(server_dir)
 
+    tunnel_running = process_manager.is_running(tunnel_pid)
     return {
+        "tunnel_problem": None if join_address or not tunnel_running else tunnel_log_problem(server_dir),
         "world_name": cfg.get("world_name"),
         "loader": cfg.get("loader"),
         "mc_version": cfg.get("mc_version"),
         "server_running": process_manager.is_running(server_pid),
         "server_pid": server_pid,
-        "tunnel_running": process_manager.is_running(tunnel_pid),
+        "tunnel_running": tunnel_running,
         "tunnel_pid": tunnel_pid,
         "join_address": join_address,
         "whitelist_enabled": whitelist_enabled,
