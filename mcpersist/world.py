@@ -220,9 +220,20 @@ def read_prism_java_major(instance_dir):
     for line in cfg_path.read_text(encoding="utf-8", errors="replace").splitlines():
         if line.startswith("JavaVersion="):
             value = line.split("=", 1)[1].strip()
-            match = re.match(r"^(\d+)", value)
+            match = re.match(r"^(\d+)(?:\.(\d+))?", value)
             if match:
-                return int(match.group(1))
+                major = int(match.group(1))
+                # This is a Java *runtime version string*, and the legacy form puts
+                # the real major second: Java 8 is written "1.8.0_312", so taking
+                # only the leading component returned 1. That then got persisted as
+                # required_java_major and sent java_manager.ensure_java() hunting
+                # for a nonexistent "Java 1" (and downloading Adoptium feature
+                # version 1), instead of the Java 8 the launcher had just told us.
+                # Modern strings ("25.0.1") are unaffected. Same handling
+                # javacheck.detected_major_version already does for `java -version`.
+                if major == 1 and match.group(2):
+                    return int(match.group(2))
+                return major
     return None
 
 
