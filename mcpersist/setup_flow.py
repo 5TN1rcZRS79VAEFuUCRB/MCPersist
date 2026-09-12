@@ -327,6 +327,7 @@ def finish_setup(
     cfg = config.load()
     server_dir = SERVERS_DIR / world_name
 
+    setup_failed = False
     lines = []
     if owner_uuid and owner_name:
         write_ops(server_dir, owner_uuid, owner_name)
@@ -379,18 +380,24 @@ def finish_setup(
         lines.append(f"Forge {forge_version} - running its installer ...")
         java_exe = javacheck.find_java(cfg.get("java_path") or "java")
         if not java_exe:
+            # Recorded as a real failure, not just a warning line: without the
+            # installer having run there is no runnable server here at all, and
+            # reporting "Setup complete." would make config.json point at a world
+            # that cannot start, with the only explanation buried mid-log.
+            setup_failed = True
             lines.append(
-                "WARNING: no working Java found, so Forge's installer couldn't run. Install Java "
-                f"{required_java} (https://adoptium.net/) or fix \"java_path\" in config.json, then "
-                "run setup again."
+                "ERROR: no working Java found, so Forge's installer couldn't run - this world has no "
+                f"runnable server yet. Install Java {required_java} (https://adoptium.net/) or fix "
+                '"java_path" in config.json, then run setup again.'
             )
         else:
             server_forge.run_installer(java_exe, installer_path, server_dir)
             installer_path.unlink(missing_ok=True)
-            if server_forge.find_launch_args_file(server_dir) is None:
+            if server_forge.find_launch_args_file(server_dir, mc_version) is None:
+                setup_failed = True
                 lines.append(
-                    "WARNING: the installer finished, but this app doesn't recognize the server "
-                    "layout it produced (only modern Forge, 1.17+, is supported) - it may not start."
+                    "ERROR: the installer finished, but this app doesn't recognize the server "
+                    "layout it produced (only modern Forge, 1.17+, is supported) - it won't start."
                 )
         if copy_mods:
             _copy_mods_and_report(lines, instance_dir, server_dir)
@@ -421,6 +428,13 @@ def finish_setup(
         f"{config.ensure_simulation_distance(cfg)} based on this PC's specs - change this anytime "
         "in the Performance section of the status screen."
     )
+    # config/meta are still written even on failure, deliberately: the world is set
+    # up apart from the missing server, so fixing Java and re-running setup (or
+    # switching to it later) picks up right where this left off rather than starting
+    # over. Only the reported outcome changes - "Setup complete." would be a lie.
+    if setup_failed:
+        lines.append("Setup did NOT complete - see the error above. Fix it and run setup again.")
+        return ActionResult(False, lines)
     lines.append("Setup complete.")
     return ActionResult(True, lines)
 
@@ -473,7 +487,11 @@ def list_known_servers():
     found = []
     for entry in sorted(SERVERS_DIR.iterdir()):
         meta_path = entry / "mcpersist_meta.json"
-        if not entry.is_dir() or not meta_path.exists():
+        # ".importing-*" is an in-progress world import (see import_worlds_from),
+        # which can already hold a copied mcpersist_meta.json while the rest of its
+        # files are still being written - it would otherwise list as a normal,
+        # selectable world mid-copy.
+        if not entry.is_dir() or entry.name.startswith(".") or not meta_path.exists():
             continue
         try:
             meta = json.loads(meta_path.read_text(encoding="utf-8"))
@@ -525,14 +543,32 @@ def import_worlds_from(source_root):
             ],
         )
 
-    imported, skipped = [], []
+    imported, skipped, failed = [], [], []
     for entry in candidates:
         dest = SERVERS_DIR / entry.name
         if dest.exists():
             skipped.append(entry.name)
             continue
-        shutil.copytree(entry, dest)
-        imported.append(entry.name)
+        # Copied into a staging directory and renamed into place, rather than
+        # written straight to dest: copytree going directly to the final path
+        # leaves a PARTIAL world behind if it dies halfway (a failing external
+        # drive, a full disk, a file locked by another program). A partial copy is
+        # worse than no copy - it can already contain mcpersist_meta.json, so it
+        # lists as a perfectly valid world in "Switch to a Previously Set-Up
+        # Server" while its region files are incomplete, and Minecraft regenerates
+        # missing chunks as fresh terrain instead of reporting anything wrong.
+        # Retrying the import wouldn't help either: dest.exists() would be true, so
+        # it'd be reported as "already present (not overwritten)". The rename is
+        # atomic within the same filesystem, so dest only ever exists complete.
+        staging = SERVERS_DIR / f".importing-{entry.name}"
+        shutil.rmtree(staging, ignore_errors=True)  # leftover from an earlier interrupted attempt
+        try:
+            shutil.copytree(entry, staging)
+            staging.rename(dest)
+            imported.append(entry.name)
+        except OSError as e:
+            shutil.rmtree(staging, ignore_errors=True)
+            failed.append(f"{entry.name} ({e})")
 
     lines = []
     if imported:
@@ -542,7 +578,14 @@ def import_worlds_from(source_root):
         lines.append(
             f"Skipped {len(skipped)} world(s) already present here (not overwritten): {', '.join(skipped)}."
         )
-    return ActionResult(True, lines, data={"imported": imported, "skipped": skipped})
+    if failed:
+        lines.append(f"Couldn't import {len(failed)} world(s): {', '.join(failed)}.")
+        lines.append("Nothing partial was left behind for those - they can be retried.")
+    return ActionResult(
+        not failed or bool(imported),
+        lines,
+        data={"imported": imported, "skipped": skipped, "failed": failed},
+    )
 
 
 def switch_to_world(world_name):

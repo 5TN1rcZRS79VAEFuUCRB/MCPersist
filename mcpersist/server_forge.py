@@ -68,13 +68,29 @@ def run_installer(java_path, installer_path, server_dir):
     return result.stdout
 
 
-def find_launch_args_file(server_dir):
+def find_launch_args_file(server_dir, mc_version=None):
     """Modern Forge (1.17+) doesn't produce one runnable server jar the way vanilla/
     Fabric do - it generates its actual launch classpath/args as a file under
     libraries/net/minecraftforge/forge/<version>/win_args.txt, meant to be passed to
     java as @file. Its own run.bat just wraps this same file, plus its own default
     heap flags (which this app supplies itself instead, via -Xmx/-Xms), so launching
     against the args file directly - skipping run.bat - keeps memory sizing under
-    this app's control rather than Forge's generated default."""
+    this app's control rather than Forge's generated default.
+
+    Installing Forge again (for a different Minecraft version, say) leaves the
+    previous version's directory in place alongside the new one, so more than one
+    args file can legitimately exist here. Picking an arbitrary match would then
+    launch the WRONG Minecraft version against the world - and silently, since
+    every args file is equally valid-looking. The directories are named
+    <mc_version>-<forge_version>, so when the caller knows which Minecraft version
+    it wants (it almost always does - it's in config.json) that prefix identifies
+    the right one exactly; the mtime fallback just prefers the most recently
+    installed one when there's nothing to match against."""
     matches = list(Path(server_dir).glob("libraries/net/minecraftforge/forge/*/win_args.txt"))
-    return matches[0] if matches else None
+    if not matches:
+        return None
+    if mc_version:
+        exact = [m for m in matches if m.parent.name.startswith(f"{mc_version}-")]
+        if exact:
+            matches = exact
+    return max(matches, key=lambda m: m.stat().st_mtime)

@@ -953,6 +953,21 @@ class SetupPage(QWidget):
         self.mode_existing_radio.setChecked(True)
         self.on_step1_mode_changed()
 
+        # Cleared explicitly, because this page is one long-lived instance rather
+        # than a fresh widget per run (see tray_app.py) - anything left here carries
+        # into the next setup. An owner resolved for a world the user then backed
+        # out of would otherwise still be sitting here, ready to be written into a
+        # different world's whitelist.json/ops.json.
+        self.world_name = None
+        self.owner_uuid = None
+        self.owner_name = None
+        self.is_new_world = False
+        self._worker = None
+        self.prepare_msg.setText("")
+        self.finish_msg.setText("")
+        self.finish_btn.setEnabled(False)
+        self.finish_btn.setText("Finish Setup")
+
         self.step1_box.setVisible(True)
         self.step2_box.setVisible(False)
         self.step3_box.setVisible(False)
@@ -1173,11 +1188,31 @@ class SetupPage(QWidget):
         self._worker.start()
 
     def _on_prepare_done(self, result):
+        # SetupPage is one long-lived instance reused via reset(), and a worker from
+        # an abandoned run (cancelled mid-copy, then a different world started) still
+        # delivers its result when it eventually finishes. Without this guard, a slow
+        # earlier run landing after a later one would overwrite owner_uuid/owner_name
+        # with the wrong world's owner - whitelisting and opping the world now being
+        # set up to whoever owned the one that was abandoned.
+        if self.sender() is not self._worker:
+            return
         if isinstance(result, WorkerError):
             self.prepare_msg.setText(f"Failed: {result.message}")
             self.finish_btn.setEnabled(False)
             return
         self.prepare_msg.setText("\n".join(result.lines))
+        # Enabled only when prepare actually SUCCEEDED. Checking just for WorkerError
+        # missed ordinary ok=False results - most importantly "servers\<name> already
+        # exists - pick a different world name", which is one line of text next to a
+        # live button. Clicking Finish anyway ran finish_setup against that existing
+        # server: regenerating its server.properties from the new-world options and,
+        # because a failed prepare resolves no owner, rewriting it with
+        # white-list=false - quietly turning an established, whitelisted server into
+        # a publicly joinable one (see the disclaimer prepare_world itself prints).
+        if not result.ok:
+            self.owner_uuid = self.owner_name = None
+            self.finish_btn.setEnabled(False)
+            return
         self.owner_uuid = result.data.get("owner_uuid")
         self.owner_name = result.data.get("owner_name")
         self.finish_btn.setEnabled(True)

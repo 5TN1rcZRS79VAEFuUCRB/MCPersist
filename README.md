@@ -74,7 +74,8 @@ whitelist remove <username>
 whitelist list
 ```
 
-Case-sensitive, needs their real account name. To make someone an op too:
+Not case-sensitive, but it does need to be their real account name, spelled
+correctly - the server resolves it against Mojang. To make someone an op too:
 `op <username>`, same way. All of these take effect immediately, no restart needed -
 or from the CLI, `run.bat whitelist-add <username>` does the same as the first one
 (works whether the server's running or not).
@@ -121,7 +122,7 @@ your own on a VPS you control. Point any MCPersist client at it with
 - Windows + Vanilla/Fabric/Forge (no NeoForge yet - detected and flagged with a
   clear warning if your world uses one, not silently mis-set-up).
 - The server only runs while your PC is on and awake.
-- Fabric mod support copies your client `mods/` folder as a starting point. Client-only
+- Mod support (Fabric and Forge) copies your client `mods/` folder as a starting point. Client-only
   mods (rendering, HUD, etc.) can crash a dedicated server - if startup fails, check
   `servers/<world>/logs/server.out.log` and remove the offending mod(s) from
   `servers/<world>/mods/`.

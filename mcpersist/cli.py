@@ -182,6 +182,13 @@ def cmd_setup(args):
         prepare_result = setup_flow.prepare_world(instance_dir, world_name)
         for line in prepare_result.lines:
             print(line)
+        # Checked here too, matching the new-world branch above: without it a failed
+        # prepare (an unusable world name, an unreadable save) still fell through to
+        # finish_setup, which would download a server jar and write config.json for a
+        # world whose save was never actually copied - reporting the failure and then
+        # carrying on as though it hadn't happened.
+        if not prepare_result.ok:
+            return 1
 
     owner_uuid = prepare_result.data.get("owner_uuid")
     owner_name = prepare_result.data.get("owner_name")

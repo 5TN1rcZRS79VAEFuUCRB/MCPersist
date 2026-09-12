@@ -77,7 +77,11 @@ def start_server(cfg, server_dir):
     # Fabric do - it's launched via an @args-file under libraries/ instead (see
     # server_forge.find_launch_args_file). Everything else about starting it is
     # identical, so this is the only real branch point.
-    forge_args_file = server_forge.find_launch_args_file(server_dir) if cfg.get("loader") == "forge" else None
+    forge_args_file = (
+        server_forge.find_launch_args_file(server_dir, cfg.get("mc_version"))
+        if cfg.get("loader") == "forge"
+        else None
+    )
     jar_path = server_dir / "server.jar"
     if forge_args_file is None and not jar_path.exists():
         return ActionResult(False, [f"Missing {jar_path} - run `run.bat setup` again."])
