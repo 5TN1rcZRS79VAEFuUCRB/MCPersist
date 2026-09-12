@@ -743,14 +743,20 @@ class SetupPage(QWidget):
         self.detected_instances_box = QWidget()
         detected_layout = QVBoxLayout(self.detected_instances_box)
         detected_layout.setContentsMargins(0, 0, 0, 0)
-        detected_layout.addWidget(QLabel("Detected Minecraft instances"))
+        # Both this and the folder label below are re-worded per mode in
+        # on_step1_mode_changed - the instance is used for two quite different
+        # jobs depending on the mode (where the save lives vs. which version and
+        # loader to build), and a single wording can only describe one of them.
+        self.detected_instances_label = QLabel("Detected Minecraft instances")
+        detected_layout.addWidget(self.detected_instances_label)
         self.detected_instances_combo = QComboBox()
         self.detected_instances_combo.currentIndexChanged.connect(self.on_detected_instance_selected)
         detected_layout.addWidget(self.detected_instances_combo)
         instance_fields_layout.addWidget(self.detected_instances_box)
         self.detected_instances_box.setVisible(False)
 
-        instance_fields_layout.addWidget(QLabel("Minecraft instance folder"))
+        self.instance_dir_label = QLabel("Minecraft instance folder")
+        instance_fields_layout.addWidget(self.instance_dir_label)
         instance_dir_row = QHBoxLayout()
         self.instance_dir_edit = QLineEdit()
         browse_btn = QPushButton("Browse...")
@@ -994,6 +1000,19 @@ class SetupPage(QWidget):
         is_new = self.mode_new_radio.isChecked()
         self.instance_fields_box.setVisible(not is_switch)
         self.switch_fields_box.setVisible(is_switch)
+        # A brand-new world has no save to go looking for, so in that mode the
+        # instance isn't being asked for as "where your worlds are" - it's the only
+        # thing that says which Minecraft version and mod loader the new server
+        # should be built as (see detect_new_world_info). Same widgets, genuinely
+        # different question, so they say which one they're asking.
+        if is_new:
+            self.detected_instances_label.setText("Match a detected Minecraft instance")
+            self.instance_dir_label.setText(
+                "Minecraft instance to match - sets the new server's version and mod loader"
+            )
+        else:
+            self.detected_instances_label.setText("Detected Minecraft instances")
+            self.instance_dir_label.setText("Minecraft instance folder - where your worlds are")
         if is_switch:
             self.find_or_continue_btn.setText("Switch")
         elif is_new:
