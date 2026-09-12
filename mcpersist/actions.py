@@ -348,10 +348,21 @@ def add_to_whitelist(cfg, server_dir, username):
             )
         os.replace(tmp_path, wl_path)
     except OSError as e:
-        tmp_path.unlink(missing_ok=True)
         lines = [f"Couldn't write {wl_path.name} ({e}) - {name!r} was not added."]
-        if salvage is not None and salvage.exists():
-            lines.append(f"The unreadable original is at {salvage.name}.")
+        # Cleanup is itself best-effort: whatever blocked the write (antivirus or a
+        # sync agent holding the new .tmp) can equally block removing it, and
+        # letting that raise from in here would throw away the explanation above -
+        # the caller would surface a bare OSError instead. A stray .tmp is worth
+        # far less than the message.
+        try:
+            tmp_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        try:
+            if salvage is not None and salvage.exists():
+                lines.append(f"The unreadable original is at {salvage.name}.")
+        except OSError:
+            pass
         return ActionResult(False, lines)
     return ActionResult(
         True,
