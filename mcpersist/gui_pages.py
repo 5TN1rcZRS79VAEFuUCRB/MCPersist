@@ -290,6 +290,15 @@ class StatusPage(QWidget):
 
         self._worker = None
         self._recover_worker = None
+        # A single reusable timer, not a fresh QTimer.singleShot(...) per call -
+        # start() on an already-running QTimer resets it rather than stacking a
+        # second one, so triggering a new action (Start right after Stop, say)
+        # while the previous one's message is still showing replaces the pending
+        # clear instead of leaving the OLD one to fire on schedule and blank the
+        # NEW message several seconds early.
+        self._action_msg_clear_timer = QTimer(self)
+        self._action_msg_clear_timer.setSingleShot(True)
+        self._action_msg_clear_timer.timeout.connect(lambda: self.action_msg.setText(""))
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.refresh)
         self.timer.start(4000)
@@ -463,14 +472,14 @@ class StatusPage(QWidget):
             self.action_msg.setStyleSheet("color: #e74c3c;")
             self.action_msg.setText(f"{verb} failed: {results.message}")
             self.refresh()
-            QTimer.singleShot(10000, lambda: self.action_msg.setText(""))
+            self._action_msg_clear_timer.start(10000)
             return
         all_ok = all(r.ok for r in results)
         lines = [line for r in results for line in r.lines]
         self.action_msg.setStyleSheet("color: #888;" if all_ok else "color: #e74c3c;")
         self.action_msg.setText(" / ".join(lines) if lines else f"{verb} - done.")
         self.refresh()
-        QTimer.singleShot(4000 if all_ok else 10000, lambda: self.action_msg.setText(""))
+        self._action_msg_clear_timer.start(4000 if all_ok else 10000)
 
     def on_start(self):
         _, cfg, server_dir = self.current_status()

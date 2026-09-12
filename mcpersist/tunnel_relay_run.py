@@ -31,6 +31,19 @@ CONNECT_TIMEOUT = 15
 # ever clean them up.
 PIPE_IDLE_TIMEOUT = 300
 
+# The relay pings every ~20s (see relay_server.PING_INTERVAL) specifically so a
+# genuinely dead peer can be detected even when TCP itself never delivers a
+# clean FIN/RST (a network partition, an expired NAT/firewall mapping) - but
+# that only helps if something on THIS side is actually watching for it. Without
+# a timeout here, the steady-state `reader.readline()` below hangs forever in
+# that exact scenario: no exception is ever raised, so run_once() never returns,
+# so main()'s reconnect-with-backoff loop (the entire point of this module, per
+# its own docstring) never gets a chance to fire. The tunnel process stays alive
+# and still LOOKS running (status/GUI show no error) while silently relaying
+# nothing. Comfortably larger than PING_INTERVAL so normal jitter never
+# false-positives.
+CONTROL_IDLE_TIMEOUT = 90
+
 # The control/data channels carry per-user tokens and now require TLS on the relay
 # side (see relay/relay_server.py) - the default system CA bundle is enough to
 # verify a real Let's Encrypt cert, same as any normal HTTPS client. The local
@@ -132,7 +145,7 @@ async def run_once(cfg):
             pass
 
         while True:
-            line = await reader.readline()
+            line = await asyncio.wait_for(reader.readline(), timeout=CONTROL_IDLE_TIMEOUT)
             if not line:
                 print("control connection closed by relay", flush=True)
                 return

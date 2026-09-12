@@ -8,6 +8,7 @@ import time
 from pathlib import Path
 
 from auto_assignments import load_assignments, save_assignments
+from auto_assignments import locked as auto_assignments_locked
 from users import add_user, load_users, remove_user
 
 STATUS_PATH = Path(__file__).resolve().parent / "relay_status.json"
@@ -42,13 +43,18 @@ def cmd_add(args):
 
 
 def cmd_release_auto(args):
-    assignments = load_assignments()
-    owner_ip = next((ip for ip, sub in assignments.items() if sub == args.subdomain), None)
-    if owner_ip is None:
-        print(f"{args.subdomain!r} isn't currently auto-assigned to anyone - nothing to release.")
-        return
-    del assignments[owner_ip]
-    save_assignments(assignments)
+    # Same lock relay_server.get_or_assign_subdomain holds for its own
+    # load-decide-save cycle - without it, this read-modify-write racing against
+    # the relay auto-assigning a brand-new IP at the same instant could silently
+    # clobber that new assignment right back out of the file.
+    with auto_assignments_locked():
+        assignments = load_assignments()
+        owner_ip = next((ip for ip, sub in assignments.items() if sub == args.subdomain), None)
+        if owner_ip is None:
+            print(f"{args.subdomain!r} isn't currently auto-assigned to anyone - nothing to release.")
+            return
+        del assignments[owner_ip]
+        save_assignments(assignments)
     print(
         f"Released {args.subdomain!r} (was auto-assigned to {owner_ip!r}). If that IP has a live "
         "connection under this name right now, it keeps it until that connection actually drops - "

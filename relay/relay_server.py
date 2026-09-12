@@ -16,6 +16,7 @@ from pathlib import Path
 from mc_handshake import read_handshake
 from users import load_users, verify
 from auto_assignments import load_assignments, save_assignments
+from auto_assignments import locked as auto_assignments_locked
 
 CONNECT_TIMEOUT = 10
 HANDSHAKE_TIMEOUT = 10  # a client that never finishes its handshake shouldn't hold a connection open forever
@@ -202,15 +203,20 @@ def get_or_assign_subdomain(peer_ip):
     CGNAT would end up sharing an identity here too - a real limitation, not just a
     hypothetical one, but that's the tradeoff that was asked for over pure
     per-connection randomness."""
-    assignments = load_assignments()
-    existing = assignments.get(peer_ip)
-    if existing:
-        return existing
-    taken = set(clients.keys()) | set(load_users().keys()) | set(assignments.values())
-    subdomain = generate_unique_subdomain(taken)
-    assignments[peer_ip] = subdomain
-    save_assignments(assignments)
-    return subdomain
+    # Held for the whole load-decide-save cycle, not just the final save - see
+    # auto_assignments.locked()'s own docstring for why (a lost update against
+    # admin_cli.py's release-auto-assignment, run as a separate process on the
+    # same box, otherwise possible).
+    with auto_assignments_locked():
+        assignments = load_assignments()
+        existing = assignments.get(peer_ip)
+        if existing:
+            return existing
+        taken = set(clients.keys()) | set(load_users().keys()) | set(assignments.values())
+        subdomain = generate_unique_subdomain(taken)
+        assignments[peer_ip] = subdomain
+        save_assignments(assignments)
+        return subdomain
 
 
 async def send_json(writer, obj):
@@ -322,7 +328,7 @@ async def handle_control(reader, writer):
             if not data:
                 break
             last_seen[0] = time.monotonic()
-    except Exception:
+    except Exception as e:
         # Deliberately broad, not just the handful of exception types a well-behaved
         # client can trigger (IncompleteReadError/TimeoutError/ConnectionResetError/
         # JSONDecodeError) - this port is open to the whole internet with no auth
@@ -334,7 +340,15 @@ async def handle_control(reader, writer):
         # on), but every connection handler in this file should close cleanly on bad
         # input on its own instead of relying on that fallback, same as handle_data
         # and handle_public already do.
-        pass
+        #
+        # Logged, not silently swallowed - confirmed the hard way: a lock file that
+        # ended up wrong-owned made get_or_assign_subdomain raise PermissionError on
+        # every single auto registration, with zero trace anywhere (not even
+        # journalctl, since this except catches it before it ever becomes an
+        # unhandled-exception log line) - only visible client-side as a bare "relay
+        # closed the connection". A real infrastructure failure here should never be
+        # as invisible as routine scanner noise.
+        print(f"[control] {peer_ip}: {type(e).__name__}: {e}", flush=True)
     finally:
         if ping_task:
             ping_task.cancel()
