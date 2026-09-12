@@ -73,6 +73,30 @@ STATUS_PATH = Path(__file__).resolve().parent / "relay_status.json"
 PING_INTERVAL = 20
 PING_TIMEOUT = 45
 
+# Routine, client-caused failures on the control port: a scanner throwing garbage
+# at a TLS port, a client vanishing mid-handshake, a connection reset because
+# someone stopped their server the normal way. These are exactly what
+# handle_control's broad `except` exists to absorb, and on an internet-facing
+# port they happen constantly - logging them would bury the rare line that
+# actually means something, and reads as an error when nothing is wrong
+# (confirmed against real production logs: every ordinary `run.bat stop`
+# produced a ConnectionResetError line). Note this is deliberately a list of
+# specific types rather than OSError: PermissionError and friends are OSError
+# subclasses too, and those are precisely the infrastructure failures that must
+# stay loud.
+# Deliberately does NOT include the ValueError family (JSONDecodeError,
+# UnicodeDecodeError). Malformed client input is caught narrowly at the one place
+# it's parsed instead, because the relay's own state files raise those same types
+# when they're corrupt - and a corrupt users.json/auto_assignments.json failing
+# every registration in total silence is precisely the failure this logging exists
+# to make visible.
+EXPECTED_CONTROL_ERRORS = (
+    ConnectionError,  # covers reset / broken pipe / aborted - the peer just went away
+    asyncio.TimeoutError,
+    asyncio.IncompleteReadError,
+    ssl.SSLError,  # a failed TLS handshake, i.e. anything that isn't a real client
+)
+
 # Established player<->backend sessions have no other timeout covering them once
 # piping starts (HANDSHAKE_TIMEOUT/CONNECT_TIMEOUT are already released by then, and
 # CONN_RATE_LIMIT only gates *new* attempts) - a connection that completes the
@@ -277,11 +301,28 @@ async def handle_control(reader, writer):
     try:
         if not await _upgrade_to_tls(writer):
             return
-        line = await asyncio.wait_for(reader.readline(), timeout=HANDSHAKE_TIMEOUT)
-        if not line:
+        try:
+            line = await asyncio.wait_for(reader.readline(), timeout=HANDSHAKE_TIMEOUT)
+            if not line:
+                return
+            msg = json.loads(line.decode("utf-8"))
+        except ValueError:
+            # JSONDecodeError, UnicodeDecodeError, and the error readline() raises
+            # when a client sends 64KiB with no newline are all ValueError
+            # subclasses. Caught HERE, narrowly around the one place client input is
+            # parsed, rather than by listing those types as "expected" at the outer
+            # handler - because the relay's own state files raise the very same
+            # types when they're unreadable (a corrupt users.json or
+            # auto_assignments.json is a JSONDecodeError too), and silencing those
+            # would recreate exactly the silent-total-failure bug the outer logging
+            # was added to prevent.
+            writer.close()
             return
-        msg = json.loads(line.decode("utf-8"))
-        if msg.get("type") != "register":
+        # Valid JSON isn't necessarily an object - "[]" or "1" parses fine and then
+        # blows up on .get() with an AttributeError, which correctly isn't
+        # "expected" and so would log a line per attempt: a way to write to the
+        # relay's log on demand. Treat a non-object as the malformed input it is.
+        if not isinstance(msg, dict) or msg.get("type") != "register":
             writer.close()
             return
 
@@ -341,14 +382,16 @@ async def handle_control(reader, writer):
         # input on its own instead of relying on that fallback, same as handle_data
         # and handle_public already do.
         #
-        # Logged, not silently swallowed - confirmed the hard way: a lock file that
-        # ended up wrong-owned made get_or_assign_subdomain raise PermissionError on
-        # every single auto registration, with zero trace anywhere (not even
-        # journalctl, since this except catches it before it ever becomes an
-        # unhandled-exception log line) - only visible client-side as a bare "relay
-        # closed the connection". A real infrastructure failure here should never be
-        # as invisible as routine scanner noise.
-        print(f"[control] {peer_ip}: {type(e).__name__}: {e}", flush=True)
+        # Anything NOT in EXPECTED_CONTROL_ERRORS gets logged rather than silently
+        # swallowed - confirmed the hard way: a lock file that ended up wrong-owned
+        # made get_or_assign_subdomain raise PermissionError on every single auto
+        # registration, with zero trace anywhere (not even journalctl, since this
+        # except catches it before it ever becomes an unhandled-exception log line) -
+        # only visible client-side as a bare "relay closed the connection". A real
+        # infrastructure failure here should never be as invisible as routine
+        # scanner noise.
+        if not isinstance(e, EXPECTED_CONTROL_ERRORS):
+            print(f"[control] {peer_ip}: unexpected {type(e).__name__}: {e}", flush=True)
     finally:
         if ping_task:
             ping_task.cancel()
@@ -394,7 +437,7 @@ async def handle_data(reader, writer):
             writer.close()
             return
         msg = json.loads(line.decode("utf-8"))
-        if msg.get("type") != "data_hello":
+        if not isinstance(msg, dict) or msg.get("type") != "data_hello":  # see handle_control
             writer.close()
             return
         conn_id = msg.get("id")

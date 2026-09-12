@@ -4,6 +4,7 @@ the GUI so neither duplicates it."""
 
 import json
 import shutil
+import time
 from pathlib import Path
 
 from . import config, java_manager, javacheck, mojang, server_fabric, server_forge, server_vanilla, world
@@ -193,7 +194,31 @@ def prepare_world(instance_dir, world_name):
     server_dir.mkdir(parents=True, exist_ok=True)
     (server_dir / "logs").mkdir(exist_ok=True)
 
-    lines = [f"Copying world save into {server_dir} ..."]
+    lines = []
+    # Moved aside rather than left for copy_world to clear: copy_world starts with
+    # rmtree(dest), so re-running setup on a world that was already set up here
+    # would destroy the server's copy - which by then holds however much
+    # multiplayer progress has accumulated since - and replace it with the
+    # (likely long-stale) singleplayer save. That's a reachable path, not a
+    # hypothetical: re-running setup is the only way to change a world's
+    # Minecraft version or mod loader, so wanting to do it on an existing world
+    # is a normal thing to want. prepare_new_world already refuses outright in
+    # its equivalent situation, but refusing here would block that legitimate
+    # reason, so nothing is deleted and the user is told where the old copy went.
+    # (The "your original singleplayer world is untouched" note below is about
+    # the source save - it says nothing about this destination, which is exactly
+    # why losing it here would be so easy to miss.)
+    existing_world = server_dir / "world"
+    if existing_world.exists():
+        backup_name = f"world.replaced-{time.strftime('%Y%m%d-%H%M%S')}"
+        existing_world.rename(server_dir / backup_name)
+        lines.append(
+            f"This world was already set up here, so its existing server copy was moved to "
+            f"{backup_name!r} instead of being overwritten. If that's the copy people have "
+            f"actually been playing on, that's where its progress is - nothing was deleted."
+        )
+
+    lines.append(f"Copying world save into {server_dir} ...")
     world_dir = world.copy_world(save_path, server_dir, world_subdir_name="world")
     lines.append(
         "NOTE: this is a COPY. Your original singleplayer world is untouched. Once "
@@ -404,6 +429,7 @@ WORLD_META_FIELDS = (
     "instance_dir",
     "loader",
     "mc_version",
+    "required_java_major",
     "memory_auto",
     "memory_mb",
     "performance_auto",
@@ -540,6 +566,15 @@ def switch_to_world(world_name):
     for field in WORLD_META_FIELDS:
         if field in meta:
             cfg[field] = meta[field]
+    # Assigned unconditionally, unlike the rest above: leaving a stale value here
+    # is actively harmful rather than merely out of date, because it's the Java
+    # version the *previously active* world needed and start_server only
+    # re-resolves it when it's None. Switching a 1.21 world to a 1.16.5 one would
+    # otherwise launch 1.16.5 under Java 21, and the reverse dies instantly with
+    # UnsupportedClassVersionError, surfaced only as "Server process exited
+    # immediately". Worlds whose meta file predates this field being saved have
+    # nothing to restore, so they get it cleared and re-resolved from scratch.
+    cfg["required_java_major"] = meta.get("required_java_major")
 
     props_path = server_dir / "server.properties"
     if props_path.exists():
