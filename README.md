@@ -119,10 +119,10 @@ your own on a VPS you control. Point any MCPersist client at it with
 
 ## Known limitations
 
-- Windows + Vanilla/Fabric/Forge (no NeoForge yet - detected and flagged with a
-  clear warning if your world uses one, not silently mis-set-up).
+- Windows + Vanilla/Fabric/Forge/NeoForge. Forge needs Minecraft 1.17+ and NeoForge
+  1.20.2+ (NeoForge's 1.20.1 builds were a Forge fork and aren't supported).
 - The server only runs while your PC is on and awake.
-- Mod support (Fabric and Forge) copies your client `mods/` folder as a starting point. Client-only
+- Mod support (Fabric, Forge and NeoForge) copies your client `mods/` folder as a starting point. Client-only
   mods (rendering, HUD, etc.) can crash a dedicated server - if startup fails, check
   `servers/<world>/logs/server.out.log` and remove the offending mod(s) from
   `servers/<world>/mods/`.
@@ -157,6 +157,7 @@ mcpersist/
   server_vanilla.py     downloads a matching vanilla server jar
   server_fabric.py       downloads a matching Fabric server jar + mods
   server_forge.py         downloads and runs Forge's own installer to produce a server
+  server_neoforge.py      the same for NeoForge
   java_manager.py         auto-downloads a matching portable Java (Temurin) if needed
   javacheck.py            detects an installed Java's version
   mojang.py               UUID -> username lookups (for whitelist/op)

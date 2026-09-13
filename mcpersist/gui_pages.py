@@ -988,9 +988,11 @@ class SetupPage(QWidget):
         self.vanilla_radio = QRadioButton("Vanilla")
         self.fabric_radio = QRadioButton("Fabric")
         self.forge_radio = QRadioButton("Forge")
+        self.neoforge_radio = QRadioButton("NeoForge")
         loader_row.addWidget(self.vanilla_radio)
         loader_row.addWidget(self.fabric_radio)
         loader_row.addWidget(self.forge_radio)
+        loader_row.addWidget(self.neoforge_radio)
         version_loader_layout.addLayout(loader_row)
         step2_layout.addWidget(self.version_loader_box)
 
@@ -1230,14 +1232,8 @@ class SetupPage(QWidget):
         self.vanilla_radio.setChecked(suggested == "vanilla")
         self.fabric_radio.setChecked(suggested == "fabric")
         self.forge_radio.setChecked(suggested == "forge")
-        if suggested == "neoforge":
-            self.loader_warning.setText(
-                "Detected NeoForge, which isn't supported yet - only Vanilla, Fabric, and Forge "
-                "servers can be set up right now. Pick one below, but the world may not run "
-                "correctly without its actual mod loader."
-            )
-        else:
-            self.loader_warning.setText("")
+        self.neoforge_radio.setChecked(suggested == "neoforge")
+        self.loader_warning.setText("")
 
     def _select_version(self, detected_version):
         """Populates (and caches) the version dropdown from Mojang's manifest, then
@@ -1300,7 +1296,9 @@ class SetupPage(QWidget):
 
     def on_prepare_world(self):
         self.mc_version = self.mc_version_combo.currentText()
-        if self.forge_radio.isChecked():
+        if self.neoforge_radio.isChecked():
+            self.loader = "neoforge"
+        elif self.forge_radio.isChecked():
             self.loader = "forge"
         elif self.fabric_radio.isChecked():
             self.loader = "fabric"

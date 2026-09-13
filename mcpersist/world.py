@@ -131,7 +131,7 @@ def read_mc_version(save_path):
         return None
 
 
-SUPPORTED_LOADERS = ("vanilla", "fabric", "forge")
+SUPPORTED_LOADERS = ("vanilla", "fabric", "forge", "neoforge")
 
 
 def _detect_loader_from_curseforge_manifest(instance_dir):

@@ -48,7 +48,7 @@ def download_installer(mc_version, forge_version, dest_path):
     return dest_path
 
 
-def run_installer(java_path, installer_path, server_dir):
+def run_installer(java_path, installer_path, server_dir, name="Forge"):
     """Runs the Forge installer in --installServer mode in server_dir - this is
     Forge's own supported way to produce a server, not something to reimplement by
     hand. CREATE_NO_WINDOW for the same reason as every other java.exe/powershell.exe
@@ -64,7 +64,7 @@ def run_installer(java_path, installer_path, server_dir):
     )
     if result.returncode != 0:
         tail = "\n".join((result.stdout + result.stderr).splitlines()[-20:])
-        raise RuntimeError(f"Forge installer failed (exit {result.returncode}):\n{tail}")
+        raise RuntimeError(f"{name} installer failed (exit {result.returncode}):\n{tail}")
     return result.stdout
 
 

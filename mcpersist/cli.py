@@ -6,7 +6,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from . import actions, autostart, config, server_vanilla, setup_flow, update_checker
+from . import actions, autostart, config, server_vanilla, setup_flow, update_checker, world
 from .paths import BASE_DIR
 from .version import VERSION
 
@@ -39,14 +39,8 @@ def prompt_choice(msg, options):
 
 
 def _prompt_loader(suggested_loader):
-    if suggested_loader == "neoforge":
-        print(
-            "WARNING: detected NeoForge, which isn't supported yet - only Vanilla, Fabric, and "
-            "Forge servers can be set up right now. Pick one below, but the world may not run "
-            "correctly without its actual mod loader."
-        )
-    loader_idx = prompt_choice(f"Server type (detected: {suggested_loader})", ["vanilla", "fabric", "forge"])
-    return ["vanilla", "fabric", "forge"][loader_idx]
+    loader_idx = prompt_choice(f"Server type (detected: {suggested_loader})", list(world.SUPPORTED_LOADERS))
+    return world.SUPPORTED_LOADERS[loader_idx]
 
 
 def _prompt_version(default_version):

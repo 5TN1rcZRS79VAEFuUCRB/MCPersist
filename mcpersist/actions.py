@@ -7,7 +7,7 @@ import re
 import time
 from dataclasses import dataclass, field
 
-from . import config, java_manager, javacheck, mojang, process_manager, rcon, server_forge, server_vanilla, tunnel_relay, world
+from . import config, java_manager, javacheck, mojang, process_manager, rcon, server_forge, server_neoforge, server_vanilla, tunnel_relay, world
 
 
 @dataclass
@@ -78,11 +78,12 @@ def start_server(cfg, server_dir):
     # Fabric do - it's launched via an @args-file under libraries/ instead (see
     # server_forge.find_launch_args_file). Everything else about starting it is
     # identical, so this is the only real branch point.
-    forge_args_file = (
-        server_forge.find_launch_args_file(server_dir, cfg.get("mc_version"))
-        if cfg.get("loader") == "forge"
-        else None
-    )
+    # NeoForge launches the same way, from its own args file location.
+    args_finder = {
+        "forge": server_forge.find_launch_args_file,
+        "neoforge": server_neoforge.find_launch_args_file,
+    }.get(cfg.get("loader"))
+    forge_args_file = args_finder(server_dir, cfg.get("mc_version")) if args_finder else None
     jar_path = server_dir / "server.jar"
     if forge_args_file is None and not jar_path.exists():
         return ActionResult(False, [f"Missing {jar_path} - run `run.bat setup` again."])

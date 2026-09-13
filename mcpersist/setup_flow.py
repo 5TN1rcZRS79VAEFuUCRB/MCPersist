@@ -7,7 +7,7 @@ import shutil
 import time
 from pathlib import Path
 
-from . import config, java_manager, javacheck, mojang, server_fabric, server_forge, server_vanilla, world
+from . import config, java_manager, javacheck, mojang, server_fabric, server_forge, server_neoforge, server_vanilla, world
 from .actions import ActionResult
 from .paths import SERVERS_DIR
 
@@ -373,11 +373,21 @@ def finish_setup(
     lines.append(f"Downloading {loader} server for Minecraft {mc_version} ...")
     if loader == "vanilla":
         server_vanilla.download_server_jar(mc_version, jar_path)
-    elif loader == "forge":
-        forge_version = server_forge.get_recommended_forge_version(mc_version)
-        installer_path = server_dir / "forge-installer.jar"
-        server_forge.download_installer(mc_version, forge_version, installer_path)
-        lines.append(f"Forge {forge_version} - running its installer ...")
+    elif loader in ("forge", "neoforge"):
+        # NeoForge installs and launches exactly like modern Forge (installer run
+        # with --installServer, then a win_args.txt) - only where the installer
+        # comes from and where the args file lands differ.
+        if loader == "forge":
+            module, label = server_forge, "Forge"
+            forge_version = server_forge.get_recommended_forge_version(mc_version)
+            installer_path = server_dir / "forge-installer.jar"
+            server_forge.download_installer(mc_version, forge_version, installer_path)
+        else:
+            module, label = server_neoforge, "NeoForge"
+            forge_version = server_neoforge.get_latest_neoforge_version(mc_version)
+            installer_path = server_dir / "neoforge-installer.jar"
+            server_neoforge.download_installer(forge_version, installer_path)
+        lines.append(f"{label} {forge_version} - running its installer ...")
         java_exe = javacheck.find_java(cfg.get("java_path") or "java")
         if not java_exe:
             # Recorded as a real failure, not just a warning line: without the
@@ -386,18 +396,19 @@ def finish_setup(
             # that cannot start, with the only explanation buried mid-log.
             setup_failed = True
             lines.append(
-                "ERROR: no working Java found, so Forge's installer couldn't run - this world has no "
+                f"ERROR: no working Java found, so {label}'s installer couldn't run - this world has no "
                 f"runnable server yet. Install Java {required_java} (https://adoptium.net/) or fix "
                 '"java_path" in config.json, then run setup again.'
             )
         else:
-            server_forge.run_installer(java_exe, installer_path, server_dir)
+            module.run_installer(java_exe, installer_path, server_dir)
             installer_path.unlink(missing_ok=True)
-            if server_forge.find_launch_args_file(server_dir, mc_version) is None:
+            if module.find_launch_args_file(server_dir, mc_version) is None:
                 setup_failed = True
                 lines.append(
                     "ERROR: the installer finished, but this app doesn't recognize the server "
-                    "layout it produced (only modern Forge, 1.17+, is supported) - it won't start."
+                    "layout it produced (only modern Forge 1.17+ and NeoForge 1.20.2+ are "
+                    "supported) - it won't start."
                 )
         if copy_mods:
             _copy_mods_and_report(lines, instance_dir, server_dir)
