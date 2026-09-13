@@ -545,6 +545,14 @@ class StatusPage(QWidget):
                 "server console or in-game as soon as possible."
             )
 
+        # The 4s poll lands mid-action (a start waits up to ~12s for the server, far
+        # longer if Java is downloading) and used to re-enable these, inviting a
+        # second Start/Stop while the first was still running.
+        if self._action_running():
+            self.start_btn.setEnabled(False)
+            self.stop_btn.setEnabled(False)
+            self.restart_btn.setEnabled(False)
+            return
         both_up = st["server_running"] and st["tunnel_running"]
         both_down = not st["server_running"] and not st["tunnel_running"]
         self.start_btn.setEnabled(not both_up)
@@ -556,7 +564,20 @@ class StatusPage(QWidget):
         if text and text != "-":
             QGuiApplication.clipboard().setText(text)
 
+    def _action_running(self):
+        # A flag rather than _worker.isRunning(): the result signal fires just
+        # before the thread actually exits, so isRunning() would still be True
+        # inside _on_action_done's refresh and leave the buttons off until the next
+        # poll.
+        return getattr(self, "_action_in_progress", False)
+
     def _run_blocking(self, verb, fn, *args):
+        # Replacing a still-running Worker drops the last reference to a live
+        # QThread (Qt aborts the app when one is destroyed while running) and runs
+        # two start/stop sequences against the same server at once.
+        if self._action_running():
+            return
+        self._action_in_progress = True
         self.start_btn.setEnabled(False)
         self.stop_btn.setEnabled(False)
         self.restart_btn.setEnabled(False)
@@ -566,6 +587,7 @@ class StatusPage(QWidget):
         self._worker.start()
 
     def _on_action_done(self, verb, results):
+        self._action_in_progress = False
         if isinstance(results, WorkerError):
             self.action_msg.setStyleSheet("color: #e74c3c;")
             self.action_msg.setText(f"{verb} failed: {results.message}")

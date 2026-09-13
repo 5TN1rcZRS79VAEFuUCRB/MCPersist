@@ -126,6 +126,11 @@ def start_server(cfg, server_dir):
     else:
         cmd = [java_path, f"-Xmx{memory_mb}M", f"-Xms{memory_mb}M", "-jar", str(jar_path), "nogui"]
     log_path = server_dir / "logs" / "server.out.log"
+    # launch_detached appends to this log, so an earlier run's "Done" is already in
+    # it - matching against the whole file broke out of the wait below on its first
+    # iteration, reporting a server that crashes seconds later as started. Only
+    # what this launch writes counts.
+    log_start = log_path.stat().st_size if log_path.exists() else 0
     pid = process_manager.launch_detached(cmd, cwd=server_dir, log_path=log_path, short_tmp=True)
     process_manager.write_pid(server_pid_path, pid)
 
@@ -138,17 +143,23 @@ def start_server(cfg, server_dir):
     # confirmed by reproduction to take 7-13s, not the couple seconds a single sleep
     # would catch - but exits as soon as the log reports "Done" too, so a normal
     # successful start isn't stuck waiting out the full window on the common path.
+    def new_log_text():
+        try:
+            with open(log_path, "rb") as f:
+                f.seek(log_start)
+                return f.read().decode("utf-8", errors="replace")
+        except OSError:
+            return ""
+
     for _ in range(24):
         if not process_manager.is_running(pid):
             break
-        if log_path.exists() and "Done" in log_path.read_text(encoding="utf-8", errors="replace"):
+        if "Done (" in new_log_text():
             break
         time.sleep(0.5)
     if not process_manager.is_running(pid):
         server_pid_path.unlink(missing_ok=True)
-        tail = ""
-        if log_path.exists():
-            tail = "\n".join(log_path.read_text(encoding="utf-8", errors="replace").splitlines()[-6:])
+        tail = "\n".join(new_log_text().splitlines()[-6:])
         return ActionResult(
             False,
             [
