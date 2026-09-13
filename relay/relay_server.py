@@ -460,7 +460,13 @@ async def pipe(reader, writer):
                 break
             writer.write(chunk)
             await asyncio.wait_for(writer.drain(), timeout=PIPE_IDLE_TIMEOUT)
-    except (ConnectionResetError, BrokenPipeError, asyncio.TimeoutError):
+    except (OSError, asyncio.TimeoutError):
+        # OSError, not just ConnectionReset/BrokenPipe: the data side is TLS, and
+        # ssl.SSLError (e.g. APPLICATION_DATA_AFTER_CLOSE_NOTIFY when a tunnel
+        # client closes mid-stream) is an OSError subclass that used to escape here -
+        # seen in production as "Unhandled exception in client_connected_cb", with
+        # handle_public's finally releasing the player's slot while the other
+        # direction of the session was still piping.
         pass
     finally:
         writer.close()
