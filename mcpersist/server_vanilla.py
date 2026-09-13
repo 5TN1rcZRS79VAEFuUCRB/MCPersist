@@ -2,6 +2,7 @@
 version manifest."""
 
 import hashlib
+import os
 from pathlib import Path
 
 import requests
@@ -77,15 +78,32 @@ def required_java_major(mc_version):
         return None
 
 
+def download_to_part(url, dest_path, hasher=None):
+    """Streams url into <dest>.part and returns that path; the caller verifies it and
+    then os.replace()s it over dest. Never writes dest directly: re-running setup (the
+    only way to change a world's version) downloads over an existing, working
+    server.jar, and writing it in place meant a dropped connection left it truncated
+    and a failed check deleted it - reproduced with a real local server that drops
+    mid-transfer. Removes the .part itself on a failed transfer."""
+    part = Path(str(dest_path) + ".part")
+    try:
+        resp = requests.get(url, stream=True, timeout=60)
+        resp.raise_for_status()
+        with open(part, "wb") as f:
+            for chunk in resp.iter_content(chunk_size=1 << 16):
+                f.write(chunk)
+                if hasher is not None:
+                    hasher.update(chunk)
+    except BaseException:
+        part.unlink(missing_ok=True)
+        raise
+    return part
+
+
 def download_server_jar(mc_version, dest_path):
     server = _get_server_download(mc_version)
-    resp = requests.get(server["url"], stream=True, timeout=60)
-    resp.raise_for_status()
     hasher = hashlib.sha1()
-    with open(dest_path, "wb") as f:
-        for chunk in resp.iter_content(chunk_size=1 << 16):
-            f.write(chunk)
-            hasher.update(chunk)
+    part = download_to_part(server["url"], dest_path, hasher)
 
     # Mojang's manifest publishes a sha1 for every download - this is a jar that's
     # about to be executed as a server process, so it's worth actually checking
@@ -94,9 +112,10 @@ def download_server_jar(mc_version, dest_path):
     # Mojang's own infrastructure).
     expected_sha1 = server.get("sha1")
     if expected_sha1 and hasher.hexdigest() != expected_sha1:
-        Path(dest_path).unlink(missing_ok=True)
+        part.unlink(missing_ok=True)
         raise ValueError(
             f"downloaded server jar for {mc_version} failed integrity check "
             f"(expected sha1 {expected_sha1}, got {hasher.hexdigest()}) - not using it"
         )
+    os.replace(part, dest_path)
     return dest_path

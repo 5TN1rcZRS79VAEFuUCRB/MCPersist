@@ -1,11 +1,14 @@
 """Downloads a Fabric server jar (via Fabric's meta API) and copies the instance's
 client mods into the server's mods folder as a starting point."""
 
+import os
 import shutil
 import zipfile
 from pathlib import Path
 
 import requests
+
+from . import server_vanilla
 
 META_BASE = "https://meta.fabricmc.net/v2/versions"
 
@@ -32,11 +35,9 @@ def download_server_jar(mc_version, dest_path, loader_version=None, installer_ve
     loader_version = loader_version or get_recommended_loader_version(mc_version)
     installer_version = installer_version or get_recommended_installer_version()
     url = f"{META_BASE}/loader/{mc_version}/{loader_version}/{installer_version}/server/jar"
-    resp = requests.get(url, stream=True, timeout=60)
-    resp.raise_for_status()
-    with open(dest_path, "wb") as f:
-        for chunk in resp.iter_content(chunk_size=1 << 16):
-            f.write(chunk)
+    # Into a .part file first - see server_vanilla.download_to_part for why writing
+    # over an existing server.jar directly isn't safe.
+    part = server_vanilla.download_to_part(url, dest_path)
 
     # Fabric's meta API doesn't publish a hash to check against (unlike Mojang's
     # manifest, which server_vanilla.py verifies against), but this is still about
@@ -44,9 +45,10 @@ def download_server_jar(mc_version, dest_path, loader_version=None, installer_ve
     # catches a corrupted/truncated transfer or an unexpected non-jar response
     # (an error page served with a 200, say) instead of silently handing a bad
     # file to java.
-    if not zipfile.is_zipfile(dest_path):
-        Path(dest_path).unlink(missing_ok=True)
+    if not zipfile.is_zipfile(part):
+        part.unlink(missing_ok=True)
         raise ValueError(f"downloaded Fabric server jar for {mc_version} isn't a valid jar - not using it")
+    os.replace(part, dest_path)
 
     return dest_path, loader_version, installer_version
 
