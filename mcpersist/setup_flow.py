@@ -227,6 +227,18 @@ def prepare_world(instance_dir, world_name):
         return refusal
 
     save_path = Path(instance_dir) / "saves" / world_name
+    # Before anything is created, moved aside or copied: an open world makes the
+    # copy fail partway (after an existing server copy was already moved aside)
+    # or, without the lock, capture region files mid-write.
+    if world.is_world_open(save_path):
+        return ActionResult(
+            False,
+            [
+                f"{world_name!r} is open in Minecraft right now. Save and Quit to Title (or close "
+                "Minecraft), then continue - copying a world while the game is writing to it can "
+                "produce a broken copy."
+            ],
+        )
     server_dir = SERVERS_DIR / world_name
     server_dir.mkdir(parents=True, exist_ok=True)
     (server_dir / "logs").mkdir(exist_ok=True)

@@ -184,11 +184,37 @@ def detect_loader(instance_dir):
     return "vanilla"
 
 
+def is_world_open(save_path):
+    """True if Minecraft currently has this save open. The game holds a lock on
+    session.lock for as long as the world is loaded; copying then fails partway on
+    that locked file (leaving a partial copy), and even apart from the lock, the
+    region files are still being written, so a copy could be inconsistent."""
+    import msvcrt
+
+    lock_path = Path(save_path) / "session.lock"
+    if not lock_path.exists():
+        return False
+    try:
+        fd = os.open(lock_path, os.O_RDWR)
+    except OSError:
+        return True
+    try:
+        msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+        msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+        return False
+    except OSError:
+        return True
+    finally:
+        os.close(fd)
+
+
 def copy_world(save_path, dest_dir, world_subdir_name="world"):
     dest = Path(dest_dir) / world_subdir_name
     if dest.exists():
         shutil.rmtree(dest)
-    shutil.copytree(save_path, dest)
+    # session.lock belongs to whichever process has the world open - the server
+    # creates its own, and copying the game's one is what fails if it's locked.
+    shutil.copytree(save_path, dest, ignore=shutil.ignore_patterns("session.lock"))
     return dest
 
 
@@ -203,6 +229,8 @@ def find_owner_uuid(server_world_dir):
         if not playerdata_dir.exists():
             continue
         uuids = [p.stem for p in playerdata_dir.glob("*.dat") if not p.stem.endswith("_old")]
+        if not uuids:
+            continue  # an empty new-layout folder shouldn't hide data in the old one
         if len(uuids) == 1:
             return uuids[0]
         return None
@@ -263,6 +291,11 @@ def required_java_major(mc_version_str, instance_dir=None):
         return 17
     major, minor = int(match.group(1)), int(match.group(2))
     patch = int(match.group(3) or 0)
+    # Year-based versions (26.1+) need Java 25. Only reached when Mojang's manifest
+    # (the normal source) is unavailable, but "26.2" compared as (26, 2, 0) is
+    # greater than (1, 20, 5) and used to fall into the Java 21 row below.
+    if major >= 26:
+        return 25
     if (major, minor, patch) >= (1, 20, 5):
         return 21
     if (major, minor, patch) >= (1, 17, 0):
