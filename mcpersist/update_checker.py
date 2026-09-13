@@ -117,23 +117,75 @@ try {
     # Grace period after the process disappears, before touching its files.
     Start-Sleep -Seconds 2
 
+    # Copy-Item is not all-or-nothing: it writes files until it reaches a locked one
+    # and stops, leaving new _internal files beside the old exe - an install that
+    # won't launch. Confirmed by a real run with the tunnel (MCPersist.exe itself)
+    # holding the install: 258 files overwritten, then "old install left in place".
+    # So: (1) before writing anything, confirm every file about to be replaced can
+    # be opened exclusively, retrying while any can't; (2) back those files up and
+    # restore them if the copy still fails partway.
+    # [IO.Directory]::GetFiles, not Get-ChildItem/Resolve-Path: those return the
+    # long form of an 8.3 short path (the temp dir usually arrives as a short ABCDEF~1 form),
+    # which breaks the prefix arithmetic below - found by a real run where this
+    # silently matched zero files. GetFiles keeps the exact prefix it was given.
+    $stagingRoot = $StagingDir.TrimEnd('\\')
+    $targets = @([System.IO.Directory]::GetFiles($stagingRoot, '*', 'AllDirectories') | ForEach-Object {
+        Join-Path $DestDir $_.Substring($stagingRoot.Length + 1)
+    } | Where-Object { Test-Path -LiteralPath $_ })
+    Log "Update replaces $($targets.Count) existing file(s)"
+
+    $unlocked = $false
+    for ($i = 1; $i -le 15; $i++) {
+        $blocked = $null
+        foreach ($t in $targets) {
+            try {
+                $fs = [System.IO.File]::Open($t, 'Open', 'ReadWrite', 'None')
+                $fs.Close()
+            } catch {
+                $blocked = $t
+                break
+            }
+        }
+        if (-not $blocked) { $unlocked = $true; break }
+        Log "Waiting for files to be released (attempt $i/15): $blocked is in use"
+        Start-Sleep -Seconds 2
+    }
+    if (-not $unlocked) {
+        Log "FAILED: $blocked stayed in use (is the MCPersist tunnel still running?) - nothing was changed, old install left in place"
+        exit 1
+    }
+
+    $backupDir = "$stagingRoot.backup"
+    Remove-Item -LiteralPath $backupDir -Recurse -Force -ErrorAction SilentlyContinue
+    foreach ($t in $targets) {
+        $b = Join-Path $backupDir $t.Substring($DestDir.TrimEnd('\\').Length + 1)
+        New-Item -ItemType Directory -Force -Path (Split-Path -Parent $b) | Out-Null
+        Copy-Item -LiteralPath $t -Destination $b -Force -ErrorAction Stop
+    }
+
     Log "Copying already-validated update from $StagingDir to $DestDir"
     $copied = $false
-    for ($i = 1; $i -le 10; $i++) {
+    for ($i = 1; $i -le 3; $i++) {
         try {
             Copy-Item -Path (Join-Path $StagingDir '*') -Destination $DestDir -Recurse -Force -ErrorAction Stop
             $copied = $true
             break
         } catch {
-            Log "Copy attempt $i/10 failed: $($_.Exception.Message)"
+            Log "Copy attempt $i/3 failed: $($_.Exception.Message)"
             Start-Sleep -Seconds 2
         }
     }
 
     if (-not $copied) {
-        Log "FAILED: could not copy update after 10 attempts - old install left in place"
+        try {
+            Copy-Item -Path (Join-Path $backupDir '*') -Destination $DestDir -Recurse -Force -ErrorAction Stop
+            Log "FAILED: could not copy update - restored the previous install's files, old install left in place"
+        } catch {
+            Log "FAILED: could not copy update, and restoring the previous files also failed ($($_.Exception.Message)) - reinstall MCPersist from the releases page; the previous files are in $backupDir"
+        }
         exit 1
     }
+    Remove-Item -LiteralPath $backupDir -Recurse -Force -ErrorAction SilentlyContinue
 
     if (-not (Test-Path -LiteralPath $ExePath)) {
         Log "FAILED: $ExePath not found after copy"
