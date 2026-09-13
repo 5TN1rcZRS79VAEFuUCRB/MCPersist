@@ -15,7 +15,17 @@ def detected_major_version(java_path="java"):
     if not exe:
         return None
     try:
-        result = subprocess.run([exe, "-version"], capture_output=True, text=True, timeout=10)
+        # CREATE_NO_WINDOW like every other console child this app launches: from the
+        # windowed GUI (no console of its own), java.exe otherwise gets a visible
+        # console window of its own - verified, not assumed. Reached during normal
+        # auto-Java setup whenever a system Java is on PATH.
+        result = subprocess.run(
+            [exe, "-version"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            creationflags=subprocess.CREATE_NO_WINDOW,
+        )
     except Exception:
         return None
     output = result.stdout + result.stderr
