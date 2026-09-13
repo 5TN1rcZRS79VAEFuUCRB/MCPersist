@@ -6,6 +6,8 @@ import json
 import os
 from pathlib import Path
 
+from auto_assignments import keep_owner
+
 USERS_PATH = Path(__file__).resolve().parent / "users.json"
 
 
@@ -21,6 +23,7 @@ def save_users(users):
     # can't leave a truncated file that breaks every registration until fixed by hand.
     tmp_path = USERS_PATH.with_suffix(".json.tmp")
     tmp_path.write_text(json.dumps(users, indent=2), encoding="utf-8")
+    keep_owner(tmp_path, USERS_PATH)
     os.replace(tmp_path, USERS_PATH)
 
 
@@ -31,9 +34,12 @@ def add_user(subdomain, token):
 
 
 def remove_user(subdomain):
+    """Returns whether the user existed."""
     users = load_users()
-    users.pop(subdomain, None)
+    if users.pop(subdomain, None) is None:
+        return False
     save_users(users)
+    return True
 
 
 def verify(subdomain, token):

@@ -3,6 +3,7 @@ users (add-user/remove-user/list-users) and checking live status (status)."""
 
 import argparse
 import json
+import re
 import secrets
 import time
 from pathlib import Path
@@ -14,7 +15,24 @@ from users import add_user, load_users, remove_user
 STATUS_PATH = Path(__file__).resolve().parent / "relay_status.json"
 
 
+# A single DNS label. Lowercase only: relay_server lowercases the address players
+# type before looking it up, so an uppercase reservation could never be reached.
+SUBDOMAIN_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
+
+
 def cmd_add(args):
+    if not SUBDOMAIN_RE.match(args.subdomain):
+        print(
+            f"Refusing: {args.subdomain!r} isn't a valid subdomain - use lowercase letters, digits "
+            "and hyphens (not at the start or end), up to 63 characters."
+        )
+        return
+    if args.subdomain in load_users() and not args.force:
+        print(
+            f"Refusing: {args.subdomain!r} is already a user. Issuing a new token would lock out "
+            "whoever has the current one - re-run with --force if that's what you want."
+        )
+        return
     # Auto (unreserved) clients get a persistent subdomain tied to their source IP
     # that never expires on its own (see relay_server.get_or_assign_subdomain) -
     # without this check, reserving that same name here would silently create two
@@ -63,8 +81,10 @@ def cmd_release_auto(args):
 
 
 def cmd_remove(args):
-    remove_user(args.subdomain)
-    print(f"Removed {args.subdomain!r}")
+    if remove_user(args.subdomain):
+        print(f"Removed {args.subdomain!r}")
+    else:
+        print(f"{args.subdomain!r} isn't a registered user - nothing removed. (See list-users.)")
 
 
 def cmd_list(args):
@@ -119,6 +139,7 @@ def main():
 
     p_add = sub.add_parser("add-user")
     p_add.add_argument("subdomain")
+    p_add.add_argument("--force", action="store_true", help="Replace an existing user's token")
     p_add.set_defaults(func=cmd_add)
 
     p_remove = sub.add_parser("remove-user")

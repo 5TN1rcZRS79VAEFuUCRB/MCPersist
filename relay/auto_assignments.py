@@ -38,7 +38,9 @@ def locked():
         yield
         return
     try:
-        LOCK_PATH.touch(exist_ok=True)
+        if not LOCK_PATH.exists():
+            LOCK_PATH.touch()
+            keep_owner(LOCK_PATH, LOCK_PATH.parent)  # a root-created lock file locked the relay out once
         lock_file = open(LOCK_PATH, "r+")
     except OSError as e:
         # The race this prevents is rare and self-healing (worst case: an IP gets
@@ -77,4 +79,19 @@ def save_assignments(assignments):
     # until someone notices and manually fixes the file.
     tmp_path = ASSIGNMENTS_PATH.with_suffix(".json.tmp")
     tmp_path.write_text(json.dumps(assignments, indent=2), encoding="utf-8")
+    keep_owner(tmp_path, ASSIGNMENTS_PATH)
     os.replace(tmp_path, ASSIGNMENTS_PATH)
+
+
+def keep_owner(new_path, target_path):
+    """admin_cli.py is normally run as root, but the relay runs as its own service
+    user. A write-then-rename from root replaces the file with a root-owned one (and
+    an interrupted one leaves a root-owned .tmp the service user then can't
+    overwrite). Give the new file the owner of the file it replaces - or of the
+    directory, for a first write - so running admin commands as root never changes
+    who owns the relay's state. No-op when not root, and on Windows."""
+    if not hasattr(os, "geteuid") or os.geteuid() != 0:
+        return
+    ref = target_path if target_path.exists() else target_path.parent
+    st = ref.stat()
+    os.chown(new_path, st.st_uid, st.st_gid)
