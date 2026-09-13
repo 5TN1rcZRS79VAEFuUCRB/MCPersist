@@ -12,6 +12,7 @@ from . import config
 RECONNECT_DELAY = 5
 LOCAL_PORT = 25565
 ASSIGNED_ADDRESS_PATH = Path("assigned_address.txt")
+TUNNEL_START_MARKER = "tunnel starting"
 
 # Bounds every network-blocking await below (connecting, TLS handshake, waiting for
 # the registration reply) - without it, a relay that accepts the TCP/TLS connection
@@ -164,6 +165,9 @@ async def run_once(cfg):
 
 async def main():
     cfg = config.load()
+    # The log is appended across runs - actions.tunnel_log_problem stops at this
+    # line so a previous run's errors aren't reported against this one.
+    print(TUNNEL_START_MARKER, flush=True)
     while True:
         try:
             await run_once(cfg)

@@ -498,15 +498,26 @@ class StatusPage(QWidget):
         self._set_state_label(self.server_label, "Server", st["server_running"])
         self._set_state_label(self.tunnel_label, "Tunnel", st["tunnel_running"])
         self.address_label.setText(st["join_address"] or "(not assigned yet)")
-        if st["join_address"]:
+        if st["join_address"] and not st.get("tunnel_problem"):
             hint = ""
         elif not st["tunnel_running"]:
             hint = "Your address is assigned once the tunnel is running - press Start."
         elif st.get("tunnel_problem"):
-            hint = (
-                f"Can't reach the relay: {st['tunnel_problem']}\n"
-                "If this keeps happening, a firewall or antivirus may be blocking MCPersist.exe."
-            )
+            problem = st["tunnel_problem"]
+            # A refusal means the relay WAS reached, so firewall advice would send
+            # the user after the wrong thing.
+            if "already connected from this address" in problem:
+                hint = (
+                    "The relay allows one tunnel per internet connection, and another MCPersist "
+                    "tunnel on your network is already connected. Stop that one first."
+                )
+            elif problem.startswith("registration failed"):
+                hint = f"The relay refused this tunnel: {problem}"
+            else:
+                hint = (
+                    f"Can't reach the relay: {problem}\n"
+                    "If this keeps happening, a firewall or antivirus may be blocking MCPersist.exe."
+                )
         else:
             hint = "Connecting to the relay..."
         if hint != self.address_hint.text():

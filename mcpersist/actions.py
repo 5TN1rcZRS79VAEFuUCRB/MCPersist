@@ -255,6 +255,8 @@ def tunnel_log_problem(server_dir):
         line = line.strip()
         if not line or line.startswith("reconnecting in"):
             continue
+        if line == "tunnel starting":  # tunnel_relay_run.TUNNEL_START_MARKER - an earlier run's lines don't count
+            return None
         return line if any(m in line for m in _TUNNEL_ERROR_MARKERS) else None
     return None
 
@@ -273,7 +275,10 @@ def get_status(cfg, server_dir):
 
     tunnel_running = process_manager.is_running(tunnel_pid)
     return {
-        "tunnel_problem": None if join_address or not tunnel_running else tunnel_log_problem(server_dir),
+        # Checked even when an address is known: assigned_address.txt persists from
+        # the last successful registration, so a tunnel that can no longer connect
+        # (e.g. firewall re-blocking a just-updated exe) would otherwise look fine.
+        "tunnel_problem": tunnel_log_problem(server_dir) if tunnel_running else None,
         "world_name": cfg.get("world_name"),
         "loader": cfg.get("loader"),
         "mc_version": cfg.get("mc_version"),
