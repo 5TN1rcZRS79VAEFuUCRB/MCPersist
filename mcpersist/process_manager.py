@@ -86,8 +86,27 @@ def launch_detached(cmd, cwd, log_path, short_tmp=False):
     return proc.pid
 
 
+# Pid files outlive the processes they name - most commonly across a PC restart,
+# after which Windows hands low PIDs out again quickly. A bare PID then matches some
+# unrelated program, which made status say "Running", made Start refuse ("already
+# running" - so the tunnel never connected and no address was ever assigned), and
+# made Stop terminate() that unrelated program. So the file records the process's
+# start time too, and read_pid only returns a PID that is still that same process.
+_CREATE_TIME_TOLERANCE = 1.0
+
+# Legacy pid files (PID only, written before start times were recorded) can't be
+# verified that way. Accept them only when the process is plausibly ours, so an
+# update doesn't lose track of a server that's genuinely still running.
+_OUR_PROCESS_NAMES = {"java.exe", "javaw.exe", "python.exe", "pythonw.exe", "mcpersist.exe"}
+
+
 def write_pid(pid_path, pid):
-    Path(pid_path).write_text(str(pid), encoding="utf-8")
+    try:
+        created = psutil.Process(pid).create_time()
+        text = f"{pid} {created}"
+    except psutil.Error:
+        text = str(pid)
+    Path(pid_path).write_text(text, encoding="utf-8")
 
 
 def read_pid(pid_path):
@@ -95,20 +114,23 @@ def read_pid(pid_path):
     if not p.exists():
         return None
     try:
-        return int(p.read_text(encoding="utf-8").strip())
-    except ValueError:
+        parts = p.read_text(encoding="utf-8").split()
+        pid = int(parts[0])
+        recorded = float(parts[1]) if len(parts) > 1 else None
+    except (ValueError, IndexError, OSError):
+        return None
+    try:
+        proc = psutil.Process(pid)
+        if recorded is not None:
+            return pid if abs(proc.create_time() - recorded) <= _CREATE_TIME_TOLERANCE else None
+        return pid if proc.name().lower() in _OUR_PROCESS_NAMES else None
+    except psutil.Error:
+        # Gone (or not inspectable): not running, which callers treat the same as
+        # no pid file at all.
         return None
 
 
 def is_running(pid):
-    # Known limitation: this only checks that *some* process currently has this PID,
-    # not that it's actually the one a *.pid file originally recorded - Windows can
-    # reuse a PID once the original process exits. On a single-user desktop machine
-    # this is rare enough (Windows doesn't reuse PIDs aggressively) not to be worth
-    # the added complexity of verifying process identity (name/start time) at every
-    # call site, but it's a real, understood gap, not an oversight - a stale pid file
-    # coinciding with a reused PID could make an already-exited server/tunnel/GUI
-    # instance look "running" until the file is manually cleared.
     if pid is None:
         return False
     try:
