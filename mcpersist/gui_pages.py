@@ -817,7 +817,7 @@ class SetupPage(QWidget):
         # Workers from abandoned runs that were still going when the wizard was
         # re-entered. They're parked here rather than dropped so they stay both
         # referenced (destroying a QThread while its thread runs is its own crash
-        # risk) and visible to MainWindow._wait_for_pending_workers, which is what
+        # risk) and visible to MainWindow._pending_workers, which is what
         # stops the app quitting mid-copy. See reset().
         self._stale_workers = []
         self.instance_dir = None
@@ -1118,7 +1118,7 @@ class SetupPage(QWidget):
         # _on_prepare_done ignore an abandoned run's late result, but simply
         # setting it to None would have thrown away the last reference to a
         # QThread that may still be copying a world - hiding it from
-        # _wait_for_pending_workers (so quitting no longer waits for it, leaving a
+        # MainWindow._pending_workers (so quitting no longer waits for it, leaving a
         # half-copied world behind) and risking it being finalized mid-run.
         if self._worker is not None and self._worker.isRunning():
             self._stale_workers.append(self._worker)

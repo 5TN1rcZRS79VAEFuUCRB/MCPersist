@@ -144,24 +144,43 @@ class MainWindow(QMainWindow):
         """Used directly (not via closeEvent) by the self-update flow, which needs
         to actually exit right after a successful update - there's no window-close
         involved there at all."""
-        self._wait_for_pending_workers()
-        QApplication.quit()
+        self._when_idle(QApplication.quit)
 
-    def _wait_for_pending_workers(self):
-        """Nothing here previously stopped a user from clicking Stop and then
-        closing the window right after, before that action's background Worker
-        (a QThread) had actually finished - destroying a QThread object while its
-        underlying thread is still running is a real, if narrow, crash risk in
-        its own right, separate from the actual process_manager.py
-        finalizer-timing bug this session traced a real reproducible crash to
-        (see _detached_procs there). Every path to quitting funnels through
-        here, so this is the one place that can confirm nothing is still in
-        flight, rather than every call site remembering to check. Waits up to
-        5s per worker - long enough for a real Stop (RCON + graceful/kill
-        timeouts) or setup step to finish normally, without hanging the quit
-        forever if one is genuinely stuck.
-        """
-        candidates = (
+    def _when_idle(self, then):
+        """Runs `then` once no background task is running. Quitting while one runs
+        destroys a live QThread, which Qt answers by aborting the process - and it
+        kills the task partway (a half-copied world, a start whose server was
+        launched but never confirmed). The old approach blocked the GUI thread up to
+        5s per task and then quit anyway, which a ~12s Start or a minutes-long setup
+        always outlasted: reproduced as a frozen window, "QThread: Destroyed while
+        thread is still running", and an aborted process. Instead nothing blocks:
+        the title says what's happening and this polls until the task is done."""
+        if not self._pending_workers():
+            then()
+            return
+        self.setWindowTitle(f"MCPersist v{VERSION} - closing when the current task finishes...")
+        if not getattr(self, "_idle_timer", None):
+            self._idle_timer = QTimer(self)
+            self._idle_timer.setInterval(250)
+            self._idle_timer.timeout.connect(self._check_idle)
+        self._idle_then = then
+        self._idle_timer.start()
+
+    def _check_idle(self):
+        if self._pending_workers():
+            return
+        self._idle_timer.stop()
+        self._closing_when_idle = True
+        self._idle_then()
+
+    def _pending_workers(self):
+        return [w for w in self._worker_candidates() if w is not None and w.isRunning()]
+
+    def _worker_candidates(self):
+        """Every background Worker (QThread) the app can have in flight. Every path
+        to quitting checks these (see _when_idle), so this is the one list to
+        extend when a page gains a new worker."""
+        return (
             getattr(self.status_page, "_worker", None),
             getattr(self.status_page, "_update_worker", None),
             getattr(self.status_page, "_update_apply_worker", None),
@@ -173,12 +192,12 @@ class MainWindow(QMainWindow):
             # waiting on, since quitting mid-copy is what leaves a half-copied world.
             *getattr(self.setup_page, "_stale_workers", ()),
         )
-        for worker in candidates:
-            if worker is not None and worker.isRunning():
-                worker.wait(5000)
 
     def closeEvent(self, event):
-        self._wait_for_pending_workers()
+        if self._pending_workers():
+            event.ignore()
+            self._when_idle(self.close)
+            return
         event.accept()
 
 
