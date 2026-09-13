@@ -12,6 +12,40 @@ from .actions import ActionResult
 from .paths import SERVERS_DIR
 
 
+def _refuse_while_active_world_running(switch_target=None):
+    """Setting up or switching worlds repoints config.json at another world. Doing
+    that while the active world's server or tunnel is still running orphans them:
+    the app can no longer see or stop them, the next Start collides with the old
+    server still holding port 25565, and a second tunnel gets refused by the relay.
+    Re-running setup on the running world itself is worse - it moves the world
+    folder aside while Minecraft has files open in it.
+
+    Returns an ActionResult refusal, or None when it's safe to proceed. Switching to
+    the world that's already active changes nothing, so that stays allowed."""
+    cfg = config.load()
+    active = cfg.get("world_name")
+    server_dir = config.server_dir(cfg)
+    if not active or server_dir is None or switch_target == active:
+        return None
+    from . import actions
+
+    try:
+        st = actions.get_status(cfg, server_dir)
+    except Exception:
+        return None
+    running = [name for name, up in (("server", st["server_running"]), ("tunnel", st["tunnel_running"])) if up]
+    if not running:
+        return None
+    return ActionResult(
+        False,
+        [
+            f"{active!r} still has its {' and '.join(running)} running. Stop it first (Stop on the "
+            "status screen), then set up or switch worlds - otherwise it keeps running where "
+            "MCPersist can no longer see or stop it."
+        ],
+    )
+
+
 def default_instance_dir():
     return str(world.default_instance_dir() or "")
 
@@ -188,6 +222,9 @@ def prepare_world(instance_dir, world_name):
     kicking off the slow server-jar download."""
     if not _is_path_safe_name(world_name):
         return ActionResult(False, [f"{world_name!r} isn't a valid world name."])
+    refusal = _refuse_while_active_world_running()
+    if refusal:
+        return refusal
 
     save_path = Path(instance_dir) / "saves" / world_name
     server_dir = SERVERS_DIR / world_name
@@ -256,6 +293,9 @@ def prepare_new_world(instance_dir, world_name, owner_username):
     including the owner can join without it."""
     if not owner_username or not owner_username.strip():
         return ActionResult(False, ["A Minecraft username is required - nobody can join a whitelisted server without one."])
+    refusal = _refuse_while_active_world_running()
+    if refusal:
+        return refusal
     if not valid_new_world_name(world_name):
         return ActionResult(False, [f"{world_name!r} isn't a valid world name."])
 
@@ -324,6 +364,12 @@ def finish_setup(
     The owner is always opped when known, not a choice - getting into a whitelisted
     server at all already means they're trusted enough to be there, so there's no
     real distinction left to ask about."""
+    # Checked again here, not just in prepare: Start is one click away between the
+    # two steps, and this is the call that installs over the server and repoints
+    # config.json.
+    refusal = _refuse_while_active_world_running()
+    if refusal:
+        return refusal
     cfg = config.load()
     server_dir = SERVERS_DIR / world_name
 
@@ -616,6 +662,9 @@ def switch_to_world(world_name):
         return ActionResult(
             False, [f"{world_name!r} doesn't look like a world MCPersist set up (no saved settings found)."]
         )
+    refusal = _refuse_while_active_world_running(switch_target=world_name)
+    if refusal:
+        return refusal
     try:
         meta = json.loads(meta_path.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError) as e:
