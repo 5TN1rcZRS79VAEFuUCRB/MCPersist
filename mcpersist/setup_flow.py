@@ -149,6 +149,25 @@ def write_server_properties(server_dir, cfg, enable_whitelist, world_options=Non
     if world_options:
         props.update(world_options)
     path = Path(server_dir) / "server.properties"
+    if path.exists():
+        # Re-running setup on an existing server (the only way to change its
+        # version or loader) used to regenerate this from scratch: every setting
+        # the owner had changed (max-players, pvp, difficulty, ...) was lost, and
+        # when the owner couldn't be re-detected it wrote white-list=false -
+        # quietly opening a locked-down server to anyone. Existing settings are
+        # kept; only the keys MCPersist manages are updated, and a whitelist that
+        # was on stays on. The motd is left alone too, since it's often customised.
+        existing = {}
+        for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+            if "=" in line and not line.lstrip().startswith("#"):
+                k, v = line.split("=", 1)
+                existing[k] = v
+        if existing.get("white-list", "").strip().lower() == "true":
+            props["white-list"] = "true"
+        if "motd" in existing:
+            props.pop("motd")
+        update_server_properties(server_dir, props)
+        return
     lines = [f"{k}={v}" for k, v in props.items()]
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
@@ -174,14 +193,37 @@ def update_server_properties(server_dir, updates):
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
+def _merge_player_entry(path, entry):
+    """Adds/updates one player in a whitelist.json/ops.json-style list, keeping
+    everyone else. These used to be overwritten with just the owner, so re-running
+    setup on an existing server removed every friend from its whitelist and ops.
+    An unreadable file is kept aside rather than silently discarded."""
+    path = Path(path)
+    players = []
+    if path.exists():
+        try:
+            loaded = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(loaded, list):
+                raise ValueError("not a list")
+            players = [p for p in loaded if isinstance(p, dict)]
+        except (ValueError, OSError):
+            path.replace(path.with_name(f"{path.name}.corrupt-{time.strftime('%Y%m%d-%H%M%S')}"))
+            players = []
+    players = [p for p in players if str(p.get("uuid", "")).lower() != entry["uuid"].lower()]
+    players.insert(0, entry)
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(json.dumps(players, indent=2), encoding="utf-8")
+    tmp.replace(path)
+
+
 def write_whitelist(server_dir, uuid, name):
-    entry = [{"uuid": uuid, "name": name}]
-    (Path(server_dir) / "whitelist.json").write_text(json.dumps(entry, indent=2), encoding="utf-8")
+    _merge_player_entry(Path(server_dir) / "whitelist.json", {"uuid": uuid, "name": name})
 
 
 def write_ops(server_dir, uuid, name):
-    entry = [{"uuid": uuid, "name": name, "level": 4, "bypassesPlayerLimit": False}]
-    (Path(server_dir) / "ops.json").write_text(json.dumps(entry, indent=2), encoding="utf-8")
+    _merge_player_entry(
+        Path(server_dir) / "ops.json", {"uuid": uuid, "name": name, "level": 4, "bypassesPlayerLimit": False}
+    )
 
 
 def _whitelist_result_lines(whitelisted, owner_name, not_whitelisted_reason):
@@ -282,12 +324,29 @@ def prepare_world(instance_dir, world_name):
         write_whitelist(server_dir, owner_uuid, owner_name)
         not_whitelisted_reason = None
     else:
-        found = "no players" if not owner_uuid else "more than one player"
-        not_whitelisted_reason = (
-            f"Couldn't automatically identify the world owner ({found} found in this world's "
-            "saved data)"
+        # find_owner_uuid returns None for both "no players" and "several"; a UUID
+        # with no name means Mojang's lookup failed (often just the network) - which
+        # used to be reported as "more than one player found".
+        if owner_uuid:
+            why = "found the owner's account ID, but couldn't look up their username from Mojang"
+        else:
+            why = "zero or several players found in this world's saved data"
+        not_whitelisted_reason = f"Couldn't automatically identify the world owner ({why})"
+    existing_props = server_dir / "server.properties"
+    whitelist_already_on = existing_props.exists() and any(
+        line.strip().lower() == "white-list=true"
+        for line in existing_props.read_text(encoding="utf-8", errors="replace").splitlines()
+    )
+    if not whitelisted and whitelist_already_on:
+        # Re-setup of a server whose whitelist is already on: write_server_properties
+        # keeps it on and whitelist.json is untouched, so "leaving it OFF" plus the
+        # open-server disclaimer would be false.
+        lines.append(
+            f"{not_whitelisted_reason}. This server's existing whitelist stays ON with its "
+            "current players - nothing about who can join was changed."
         )
-    lines.extend(_whitelist_result_lines(whitelisted, owner_name, not_whitelisted_reason))
+    else:
+        lines.extend(_whitelist_result_lines(whitelisted, owner_name, not_whitelisted_reason))
 
     return ActionResult(
         True,
