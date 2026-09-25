@@ -8,71 +8,40 @@ from pathlib import Path
 from .paths import BASE_DIR
 
 TASK_NAME = "MCPersist"
+RUN_BAT = BASE_DIR / "run.bat"
+STARTUP_BAT = (
+    Path(os.environ.get("APPDATA", "")) / "Microsoft" / "Windows" / "Start Menu" / "Programs" / "Startup" / "MCPersist.bat"
+)
 
 
-def _run_bat():
-    return BASE_DIR / "run.bat"
-
-
-def _startup_dir():
-    appdata = os.environ.get("APPDATA")
-    return Path(appdata) / "Microsoft" / "Windows" / "Start Menu" / "Programs" / "Startup"
-
-
-def _startup_bat():
-    return _startup_dir() / "MCPersist.bat"
+def _schtasks(*args):
+    result = subprocess.run(["schtasks", *args, "/tn", TASK_NAME], capture_output=True, text=True)
+    return result.returncode == 0, (result.stdout + result.stderr).strip()
 
 
 def install():
-    tr_value = f'"{_run_bat()}" start'
-    result = subprocess.run(
-        ["schtasks", "/create", "/tn", TASK_NAME, "/sc", "onlogon", "/tr", tr_value, "/rl", "limited", "/f"],
-        capture_output=True,
-        text=True,
-    )
-    if result.returncode == 0:
-        return True, "Installed via Task Scheduler.\n" + (result.stdout + result.stderr).strip()
-
-    # Some locked-down Windows images block the "onlogon" trigger for standard users
-    # even though Task Scheduler itself works - fall back to a Startup-folder entry,
-    # which needs no special privileges.
-    startup_bat = _startup_bat()
-    startup_bat.write_text(f'@echo off\r\n"{_run_bat()}" start\r\n', encoding="utf-8")
-    return True, (
-        f"Task Scheduler unavailable ({(result.stdout + result.stderr).strip()}).\n"
-        f"Installed via Startup folder instead: {startup_bat}"
-    )
+    ok, out = _schtasks("/create", "/sc", "onlogon", "/tr", f'"{RUN_BAT}" start', "/rl", "limited", "/f")
+    if ok:
+        return True, "Installed via Task Scheduler.\n" + out
+    # Some locked-down images block the "onlogon" trigger for standard users; a
+    # Startup-folder entry needs no special privileges.
+    STARTUP_BAT.write_text(f'@echo off\r\n"{RUN_BAT}" start\r\n', encoding="utf-8")
+    return True, f"Task Scheduler unavailable ({out}).\nInstalled via Startup folder instead: {STARTUP_BAT}"
 
 
 def remove():
-    task_result = subprocess.run(
-        ["schtasks", "/delete", "/tn", TASK_NAME, "/f"],
-        capture_output=True,
-        text=True,
-    )
-    startup_bat = _startup_bat()
-    removed_startup = startup_bat.exists()
+    ok, out = _schtasks("/delete", "/f")
+    removed_startup = STARTUP_BAT.exists()
     if removed_startup:
-        startup_bat.unlink()
-
-    ok = task_result.returncode == 0 or removed_startup
-    parts = [(task_result.stdout + task_result.stderr).strip()]
-    if removed_startup:
-        parts.append(f"Removed startup entry: {startup_bat}")
-    return ok, "\n".join(p for p in parts if p)
+        STARTUP_BAT.unlink()
+        out = "\n".join(filter(None, [out, f"Removed startup entry: {STARTUP_BAT}"]))
+    return ok or removed_startup, out
 
 
 def status():
-    task_result = subprocess.run(
-        ["schtasks", "/query", "/tn", TASK_NAME],
-        capture_output=True,
-        text=True,
-    )
-    if task_result.returncode == 0:
-        return True, "Task Scheduler entry found.\n" + (task_result.stdout + task_result.stderr).strip()
-
-    startup_bat = _startup_bat()
-    if startup_bat.exists():
-        return True, f"Startup folder entry found: {startup_bat}"
-
+    ok, out = _schtasks("/query")
+    if ok:
+        return True, "Task Scheduler entry found.\n" + out
+    if STARTUP_BAT.exists():
+        return True, f"Startup folder entry found: {STARTUP_BAT}"
     return False, "No autostart entry found (checked Task Scheduler and Startup folder)."

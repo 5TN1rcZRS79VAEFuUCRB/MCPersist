@@ -6,90 +6,52 @@ the wire protocol and deployment steps."""
 import argparse
 import asyncio
 import json
-import os
 import random
 import ssl
 import time
 import uuid
+from collections import Counter, deque
 from pathlib import Path
 
 from mc_handshake import read_handshake
 from users import load_users, verify
-from auto_assignments import load_assignments, save_assignments
+from auto_assignments import load_assignments, save_assignments, write_json_atomic
 from auto_assignments import locked as auto_assignments_locked
 
 CONNECT_TIMEOUT = 10
 HANDSHAKE_TIMEOUT = 10  # a client that never finishes its handshake shouldn't hold a connection open forever
 MAX_AUTO_CONNECTIONS_PER_IP = 3
 
-# Two separate abuse patterns, two separate caps:
-#  - MAX_CONNECTIONS_PER_IP guards against one source just opening a lot of raw
-#    sockets (to any of the three ports) and sitting on them - a generous ceiling,
-#    high enough that real multiplayer use (several people behind one NAT/CGNAT
-#    IP joining at once) never gets close to it.
-#  - MAX_PENDING_PER_SUBDOMAIN guards a specific backend from being hammered with
-#    simultaneous fake "connect" attempts, which a flood spread across many source
-#    IPs would otherwise dodge entirely if only MAX_CONNECTIONS_PER_IP existed. It
-#    only counts the brief negotiation window (waiting for that backend's
-#    data_hello), not established sessions, so real concurrent players on one
-#    server are never affected by it.
+# Two caps: MAX_CONNECTIONS_PER_IP stops one source sitting on lots of raw sockets
+# (generous, so several players behind one NAT never hit it). MAX_PENDING_PER_SUBDOMAIN
+# stops one backend being flooded with fake connects spread across many IPs - it counts
+# only the brief negotiation, never established players.
 MAX_CONNECTIONS_PER_IP = 20
 MAX_PENDING_PER_SUBDOMAIN = 10
 
-# A third, different abuse pattern from the two above: rapid connect/disconnect
-# cycling. Each individual connection can be too brief to ever accumulate against
-# MAX_CONNECTIONS_PER_IP (which only counts *concurrent* sockets), so a source
-# opening and immediately closing connections in a tight loop would sail right
-# through it. This counts attempts over a rolling window instead - same shape as
-# e4mc's own relay, which rate-limits at 30/minute per IP.
+# A third: rapid connect/disconnect cycling never builds up concurrent sockets, so
+# attempts are also counted over a rolling window (e4mc's relay allows 30/minute too).
 CONN_RATE_WINDOW = 60
 CONN_RATE_LIMIT = 30
 
-# conn_attempts entries only get pruned when that IP makes another attempt - one
-# that stops entirely (routine for scanner/bot traffic, already a confirmed real
-# pattern in this relay's own logs) would otherwise leave a small stale entry in
-# memory forever. Periodic cleanup (see _background_loop) bounds that instead of
-# leaving it unbounded over a long-running process.
+# conn_attempts is otherwise only pruned when that IP tries again, so IPs that stop
+# (scanners) would stay forever.
 CLEANUP_INTERVAL = 300
 
-# How often _background_loop refreshes the on-disk status snapshot - cheap (a
-# handful of dict lookups + a small JSON write), and gives admin_cli.py's `status`
-# command a near-live view without needing a live connection to the relay process
-# itself.
+# How often the status snapshot for admin_cli.py's `status` is refreshed.
 STATUS_WRITE_INTERVAL = 10
 STATUS_PATH = Path(__file__).resolve().parent / "relay_status.json"
 
-# A control connection is only ever recognized as dead by a clean TCP close
-# (reader.readline() returning EOF) - fine for a normal disconnect, but a tunnel
-# client that gets force-killed, crashes, or drops off the network without sending
-# a FIN leaves the socket looking perfectly healthy to the relay indefinitely (TCP
-# has no built-in way to notice this on its own for a long time). That leaves the
-# subdomain permanently occupied by a connection nothing is using anymore, so a
-# real reconnection attempt gets rejected forever with "already connected from this
-# address" - confirmed as a real occurrence, not just theoretical, from a client
-# stuck reconnecting every 5s with no way to ever get back in. Sending our own ping
-# and requiring a reply within PING_TIMEOUT catches that instead of trusting TCP to
-# notice on its own.
+# A tunnel client that dies without a FIN looks healthy to TCP indefinitely, holding its
+# subdomain so its own reconnects are refused forever. Our own ping, with a reply
+# required within PING_TIMEOUT, catches that.
 PING_INTERVAL = 20
 PING_TIMEOUT = 45
 
-# Routine, client-caused failures on the control port: a scanner throwing garbage
-# at a TLS port, a client vanishing mid-handshake, a connection reset because
-# someone stopped their server the normal way. These are exactly what
-# handle_control's broad `except` exists to absorb, and on an internet-facing
-# port they happen constantly - logging them would bury the rare line that
-# actually means something, and reads as an error when nothing is wrong
-# (confirmed against real production logs: every ordinary `run.bat stop`
-# produced a ConnectionResetError line). Note this is deliberately a list of
-# specific types rather than OSError: PermissionError and friends are OSError
-# subclasses too, and those are precisely the infrastructure failures that must
-# stay loud.
-# Deliberately does NOT include the ValueError family (JSONDecodeError,
-# UnicodeDecodeError). Malformed client input is caught narrowly at the one place
-# it's parsed instead, because the relay's own state files raise those same types
-# when they're corrupt - and a corrupt users.json/auto_assignments.json failing
-# every registration in total silence is precisely the failure this logging exists
-# to make visible.
+# Routine client-caused failures on the internet-facing control port (scanners, resets,
+# dropped handshakes) - not logged, or they'd bury the lines that matter. Specific
+# types, not OSError, so infrastructure errors like PermissionError stay loud. Not
+# ValueError either: corrupt state files raise that too, and must be visible.
 EXPECTED_CONTROL_ERRORS = (
     ConnectionError,  # covers reset / broken pipe / aborted - the peer just went away
     asyncio.TimeoutError,
@@ -97,71 +59,62 @@ EXPECTED_CONTROL_ERRORS = (
     ssl.SSLError,  # a failed TLS handshake, i.e. anything that isn't a real client
 )
 
-# Established player<->backend sessions have no other timeout covering them once
-# piping starts (HANDSHAKE_TIMEOUT/CONNECT_TIMEOUT are already released by then, and
-# CONN_RATE_LIMIT only gates *new* attempts) - a connection that completes the
-# handshake and then just sits there, sending nothing forever (deliberately, or a
-# genuinely frozen client with no clean FIN), would otherwise hold one of that IP's
-# MAX_CONNECTIONS_PER_IP slots and both real sockets open indefinitely - a slow-loris
-# gap the other protections don't cover. Real Minecraft traffic includes a keepalive
-# packet roughly once a second in both directions, so this is generously loose enough
-# to never affect an actual player, just to bound a truly-idle-forever connection.
+# Established sessions have no other timeout, so a connection that goes silent forever
+# would hold its sockets and a per-IP slot. Minecraft sends keepalives every second or
+# so, so this never affects a real player.
 PIPE_IDLE_TIMEOUT = 300
 
 clients = {}  # subdomain -> StreamWriter of the control connection
 pending = {}  # connection id -> asyncio.Future resolving to (data_reader, data_writer)
-auto_conn_counts = {}  # source ip -> count of live auto-registered (unreserved) connections
-conn_counts = {}  # source ip -> concurrent raw connections, across control+data+public
-pending_by_subdomain = {}  # subdomain -> count of in-flight (not yet established) connect attempts
-conn_attempts = {}  # source ip -> list of monotonic timestamps of recent connection attempts
+auto_conn_counts = Counter()  # source ip -> live auto-registered (unreserved) connections
+conn_counts = Counter()  # source ip -> concurrent raw connections, across control+data+public
+pending_by_subdomain = Counter()  # subdomain -> in-flight (not yet established) connect attempts
+conn_attempts = {}  # source ip -> deque of monotonic timestamps of recent connection attempts
 
-# Set once in main() before the servers start accepting - handle_control/handle_data
-# do the TLS upgrade themselves (see _upgrade_to_tls) rather than asyncio.start_server
-# doing it via ssl=, specifically so the rate limiter/connection cap run against
-# *every* raw connection attempt, not just ones that complete a valid handshake.
+# Set in main(). handle_control/handle_data upgrade to TLS themselves, instead of
+# start_server(ssl=...), so the rate limit and connection cap apply to every raw
+# connection, not just ones that complete a handshake.
 tls_context = None
 
 
 def _acquire_conn_slot(peer_ip):
-    """Called at the top of every connection handler, for all three ports. Returns
-    False (caller should close immediately) once one source IP is holding too many
-    open sockets at once - a cheap, blunt defense against a raw connection flood,
-    independent of whatever that connection eventually turns out to be (a real
-    player, a registration attempt, or nothing at all)."""
+    """Called at the top of every handler, on all three ports: False (close it) once one
+    source IP holds too many open sockets."""
     if peer_ip is None:
         return True  # can't identify the source (unusual) - let it through rather than break on it
-    if conn_counts.get(peer_ip, 0) >= MAX_CONNECTIONS_PER_IP:
+    if conn_counts[peer_ip] >= MAX_CONNECTIONS_PER_IP:
         return False
-    conn_counts[peer_ip] = conn_counts.get(peer_ip, 0) + 1
+    conn_counts[peer_ip] += 1
     return True
 
 
 def _release_conn_slot(peer_ip):
-    if peer_ip is None:
-        return
-    remaining = conn_counts.get(peer_ip, 0) - 1
-    if remaining <= 0:
-        conn_counts.pop(peer_ip, None)
-    else:
-        conn_counts[peer_ip] = remaining
+    if peer_ip is not None:
+        _decrement(conn_counts, peer_ip)
+
+
+def _decrement(counter, key):
+    """Counts back down, dropping keys that reach zero so the dicts don't grow forever."""
+    counter[key] -= 1
+    if counter[key] <= 0:
+        del counter[key]
+
+
+def _admit(writer):
+    """Every handler's first step, on all three ports: returns (peer_ip, admitted).
+    A connection over the rate limit or the per-IP cap is closed and not admitted."""
+    peer_ip = (writer.get_extra_info("peername") or (None,))[0]
+    if _rate_limited(peer_ip) or not _acquire_conn_slot(peer_ip):
+        writer.close()
+        return peer_ip, False
+    return peer_ip, True
 
 
 async def _upgrade_to_tls(writer):
-    """Called after the rate-limit/conn-cap checks, not before - see the module-level
-    tls_context comment for why this is done as an explicit in-handler upgrade
-    (writer.start_tls()) rather than asyncio.start_server(..., ssl=...) doing it
-    implicitly. Returns True on success; on failure (garbage/non-TLS input, a
-    mid-handshake disconnect, or simply never sending anything) closes the writer
-    and returns False, same shape as _acquire_conn_slot's caller-checks-and-closes
-    pattern.
-
-    Wrapped in the same HANDSHAKE_TIMEOUT every other read in this file uses -
-    without it, a connection that completes the raw TCP accept and then sends
-    nothing at all hangs here forever, never reaching the finally block that
-    releases its conn_slot. Confirmed as a real, cheap DoS by direct reproduction:
-    MAX_CONNECTIONS_PER_IP (20 by default) silent connections from one IP
-    permanently exhausted that IP's entire quota - across all three ports, since
-    conn_counts is shared - with no recovery, ever."""
+    """Called after the rate-limit/connection-cap checks (see tls_context). True on
+    success; otherwise closes the writer and returns False. Bounded by
+    HANDSHAKE_TIMEOUT: silent connections would otherwise hang here forever and
+    permanently use up that IP's connection slots."""
     try:
         await asyncio.wait_for(writer.start_tls(tls_context), timeout=HANDSHAKE_TIMEOUT)
         return True
@@ -171,21 +124,15 @@ async def _upgrade_to_tls(writer):
 
 
 def _rate_limited(peer_ip):
-    """True if this source IP has made too many connection attempts within
-    CONN_RATE_WINDOW - catches a rapid connect/disconnect burst that
-    MAX_CONNECTIONS_PER_IP wouldn't, since a brief connection might never
-    accumulate more than one or two *concurrent* slots no matter how many times
-    it's repeated. Called once per connection attempt (unlike
-    _acquire_conn_slot/_release_conn_slot, there's no matching release - an
-    attempt either counts against the window or it doesn't, permanently, until
-    it ages out)."""
+    """True if this source IP has made too many attempts within CONN_RATE_WINDOW. Called
+    once per attempt; attempts simply age out."""
     if peer_ip is None:
         return False
     now = time.monotonic()
     cutoff = now - CONN_RATE_WINDOW
-    attempts = conn_attempts.setdefault(peer_ip, [])
+    attempts = conn_attempts.setdefault(peer_ip, deque())
     while attempts and attempts[0] < cutoff:
-        attempts.pop(0)
+        attempts.popleft()
     if len(attempts) >= CONN_RATE_LIMIT:
         return True
     attempts.append(now)
@@ -203,34 +150,22 @@ NOUNS = [
 
 
 def generate_unique_subdomain(taken):
-    for _ in range(50):
+    """adjective-noun, with a numeric suffix once the 400 plain names start running
+    out (auto_assignments.json is never pruned, so a busy relay can get there)."""
+    for attempt in range(1000):
         candidate = f"{random.choice(ADJECTIVES)}-{random.choice(NOUNS)}"
+        if attempt >= 50:
+            candidate += f"-{random.randint(100, 999)}"
         if candidate not in taken:
             return candidate
-    # Extremely unlikely fallback if the namespace is saturated (auto_assignments.json
-    # entries are never pruned by design - see get_or_assign_subdomain - so a
-    # long-lived, busy relay could realistically approach this over time). Still
-    # checked against `taken`, same as the primary loop above - an unchecked
-    # fallback could otherwise hand out a collision, silently recording two
-    # different IPs against the same subdomain in auto_assignments.json.
-    for _ in range(50):
-        candidate = f"{random.choice(ADJECTIVES)}-{random.choice(NOUNS)}-{random.randint(100, 999)}"
-        if candidate not in taken:
-            return candidate
-    return f"{uuid.uuid4().hex[:12]}"
+    return uuid.uuid4().hex[:12]
 
 
 def get_or_assign_subdomain(peer_ip):
-    """Auto (unreserved) clients get a persistent subdomain tied to their source IP -
-    the same IP always gets the same subdomain back, forever (until manually cleared
-    from auto_assignments.json). Note: this means people sharing a public IP via
-    CGNAT would end up sharing an identity here too - a real limitation, not just a
-    hypothetical one, but that's the tradeoff that was asked for over pure
-    per-connection randomness."""
-    # Held for the whole load-decide-save cycle, not just the final save - see
-    # auto_assignments.locked()'s own docstring for why (a lost update against
-    # admin_cli.py's release-auto-assignment, run as a separate process on the
-    # same box, otherwise possible).
+    """Auto (unreserved) clients get a subdomain tied to their source IP, permanently
+    (until cleared from auto_assignments.json). People sharing an IP via CGNAT share
+    it too - the accepted tradeoff over per-connection randomness."""
+    # Held for the whole load-decide-save cycle (see auto_assignments.locked).
     with auto_assignments_locked():
         assignments = load_assignments()
         existing = assignments.get(peer_ip)
@@ -244,26 +179,16 @@ def get_or_assign_subdomain(peer_ip):
 
 
 async def send_json(writer, obj):
-    # drain() only actually blocks once the transport's write buffer backs up -
-    # normally near-instant, but a peer that stops reading (deliberately, or a
-    # zero TCP receive window) can stall it indefinitely, same underlying pattern
-    # as the _upgrade_to_tls timeout fix: every caller here (ping replies,
-    # registration success/error, the connect notification to a backend) would
-    # otherwise hang its connection - and the conn_slot it's still holding - open
-    # forever instead of the caller's own except block ever getting a chance to
-    # clean up.
+    # drain() can stall forever on a peer that stops reading, holding its connection
+    # slot open - so bound it.
     writer.write((json.dumps(obj) + "\n").encode("utf-8"))
     await asyncio.wait_for(writer.drain(), timeout=HANDSHAKE_TIMEOUT)
 
 
 async def _ping_loop(writer, subdomain, last_seen):
-    """Runs alongside handle_control's own read loop for the same connection -
-    periodically pings the client and, if nothing has been heard from it (a pong or
-    anything else) within PING_TIMEOUT, closes the connection so a genuinely dead
-    client can't hold its subdomain hostage forever. Closing the writer here
-    unblocks the main handler's own blocked readline() (a closed transport
-    completes pending reads with EOF/an error), so the usual cleanup in its
-    `finally` block still runs normally."""
+    """Runs alongside handle_control's read loop: pings the client, and closes the
+    connection if nothing has been heard within PING_TIMEOUT. Closing unblocks the
+    handler's readline(), so its normal cleanup runs."""
     try:
         while True:
             await asyncio.sleep(PING_INTERVAL)
@@ -274,12 +199,8 @@ async def _ping_loop(writer, subdomain, last_seen):
             try:
                 await send_json(writer, {"type": "ping"})
             except Exception:
-                # Same treatment as the stale-timeout branch above, not a silent
-                # exit - a failed/timed-out ping write (e.g. drain() backpressure)
-                # otherwise leaves this task gone for good with nothing left to
-                # ever detect this connection going dark later, quietly reopening
-                # the exact "subdomain permanently occupied by a connection
-                # nothing is using" bug PING_INTERVAL/PING_TIMEOUT exists to fix.
+                # A failed ping write closes too - otherwise nothing would ever notice
+                # this connection going dark.
                 writer.close()
                 return
     except asyncio.CancelledError:
@@ -291,12 +212,8 @@ async def handle_control(reader, writer):
     is_auto = False
     auto_counted = False
     ping_task = None
-    peer_ip = (writer.get_extra_info("peername") or (None,))[0]
-    if _rate_limited(peer_ip):
-        writer.close()
-        return
-    if not _acquire_conn_slot(peer_ip):
-        writer.close()
+    peer_ip, admitted = _admit(writer)
+    if not admitted:
         return
     try:
         if not await _upgrade_to_tls(writer):
@@ -307,21 +224,13 @@ async def handle_control(reader, writer):
                 return
             msg = json.loads(line.decode("utf-8"))
         except ValueError:
-            # JSONDecodeError, UnicodeDecodeError, and the error readline() raises
-            # when a client sends 64KiB with no newline are all ValueError
-            # subclasses. Caught HERE, narrowly around the one place client input is
-            # parsed, rather than by listing those types as "expected" at the outer
-            # handler - because the relay's own state files raise the very same
-            # types when they're unreadable (a corrupt users.json or
-            # auto_assignments.json is a JSONDecodeError too), and silencing those
-            # would recreate exactly the silent-total-failure bug the outer logging
-            # was added to prevent.
+            # Bad JSON, bad UTF-8 and over-long lines are all ValueError. Caught
+            # narrowly here, since corrupt state files raise the same types and must
+            # still be logged below.
             writer.close()
             return
-        # Valid JSON isn't necessarily an object - "[]" or "1" parses fine and then
-        # blows up on .get() with an AttributeError, which correctly isn't
-        # "expected" and so would log a line per attempt: a way to write to the
-        # relay's log on demand. Treat a non-object as the malformed input it is.
+        # Valid JSON isn't necessarily an object ("[]", "1"), and .get() on one would
+        # log a line per attempt.
         if not isinstance(msg, dict) or msg.get("type") != "register":
             writer.close()
             return
@@ -345,7 +254,7 @@ async def handle_control(reader, writer):
                 await send_json(writer, {"type": "error", "message": "couldn't determine your address"})
                 writer.close()
                 return
-            if auto_conn_counts.get(peer_ip, 0) >= MAX_AUTO_CONNECTIONS_PER_IP:
+            if auto_conn_counts[peer_ip] >= MAX_AUTO_CONNECTIONS_PER_IP:
                 await send_json(writer, {"type": "error", "message": "too many connections from this address"})
                 writer.close()
                 return
@@ -354,7 +263,7 @@ async def handle_control(reader, writer):
                 await send_json(writer, {"type": "error", "message": "already connected from this address"})
                 writer.close()
                 return
-            auto_conn_counts[peer_ip] = auto_conn_counts.get(peer_ip, 0) + 1
+            auto_conn_counts[peer_ip] += 1
             auto_counted = True
 
         clients[subdomain] = writer
@@ -370,26 +279,10 @@ async def handle_control(reader, writer):
                 break
             last_seen[0] = time.monotonic()
     except Exception as e:
-        # Deliberately broad, not just the handful of exception types a well-behaved
-        # client can trigger (IncompleteReadError/TimeoutError/ConnectionResetError/
-        # JSONDecodeError) - this port is open to the whole internet with no auth
-        # required to reach this point (see is_auto below), so it also has to
-        # survive genuinely malformed input, not just genuine clients disconnecting
-        # oddly. Confirmed as a real gap, not hypothetical: a scanner sending
-        # non-UTF8 bytes here previously hit an uncaught UnicodeDecodeError from
-        # line.decode("utf-8") - harmless (asyncio's own handler logged it and moved
-        # on), but every connection handler in this file should close cleanly on bad
-        # input on its own instead of relying on that fallback, same as handle_data
-        # and handle_public already do.
-        #
-        # Anything NOT in EXPECTED_CONTROL_ERRORS gets logged rather than silently
-        # swallowed - confirmed the hard way: a lock file that ended up wrong-owned
-        # made get_or_assign_subdomain raise PermissionError on every single auto
-        # registration, with zero trace anywhere (not even journalctl, since this
-        # except catches it before it ever becomes an unhandled-exception log line) -
-        # only visible client-side as a bare "relay closed the connection". A real
-        # infrastructure failure here should never be as invisible as routine
-        # scanner noise.
+        # Broad on purpose: this port is open to the internet, so it has to survive any
+        # malformed input. Anything not in EXPECTED_CONTROL_ERRORS is logged - a
+        # wrong-owned lock file once failed every auto registration with no trace at
+        # all.
         if not isinstance(e, EXPECTED_CONTROL_ERRORS):
             print(f"[control] {peer_ip}: unexpected {type(e).__name__}: {e}", flush=True)
     finally:
@@ -398,36 +291,20 @@ async def handle_control(reader, writer):
         if subdomain and clients.get(subdomain) is writer:
             del clients[subdomain]
             print(f"[control] {subdomain} disconnected", flush=True)
-        if auto_counted and peer_ip and peer_ip in auto_conn_counts:
-            # Only decrement if THIS connection is the one that incremented it above -
-            # is_auto alone isn't enough to gate this: it's set True before the
-            # auto-registration checks run, including the ones that reject and
-            # return early (already at MAX_AUTO_CONNECTIONS_PER_IP, or "already
-            # connected from this address") without ever incrementing the counter.
-            # Decrementing unconditionally on any is_auto connection would let a
-            # rejected duplicate attempt from an IP that already has a real,
-            # counted auto connection wrongly drop that real connection's count to
-            # zero - defeating MAX_AUTO_CONNECTIONS_PER_IP for every attempt after it.
-            auto_conn_counts[peer_ip] -= 1
-            if auto_conn_counts[peer_ip] <= 0:
-                del auto_conn_counts[peer_ip]
+        if auto_counted:
+            # Only if this connection incremented it: is_auto is also set on attempts
+            # rejected before counting, and decrementing for those would undo a real
+            # connection's count.
+            _decrement(auto_conn_counts, peer_ip)
         _release_conn_slot(peer_ip)
         writer.close()
 
 
 async def handle_data(reader, writer):
-    # Only guards this connection's own brief registration handshake (a few
-    # hundred ms for a real client) - once a data_hello is matched, ownership of
-    # reader/writer passes to whichever handle_public call is waiting on `fut`, so
-    # the slot is freed here rather than tracking the session that follows. Still
-    # closes off the actual risk this cap targets: a source opening many raw
-    # connections here and never completing the handshake.
-    peer_ip = (writer.get_extra_info("peername") or (None,))[0]
-    if _rate_limited(peer_ip):
-        writer.close()
-        return
-    if not _acquire_conn_slot(peer_ip):
-        writer.close()
+    # The slot only covers this connection's brief registration handshake; once
+    # data_hello matches, the reader/writer belong to the waiting handle_public call.
+    peer_ip, admitted = _admit(writer)
+    if not admitted:
         return
     try:
         if not await _upgrade_to_tls(writer):
@@ -461,12 +338,9 @@ async def pipe(reader, writer):
             writer.write(chunk)
             await asyncio.wait_for(writer.drain(), timeout=PIPE_IDLE_TIMEOUT)
     except (OSError, asyncio.TimeoutError):
-        # OSError, not just ConnectionReset/BrokenPipe: the data side is TLS, and
-        # ssl.SSLError (e.g. APPLICATION_DATA_AFTER_CLOSE_NOTIFY when a tunnel
-        # client closes mid-stream) is an OSError subclass that used to escape here -
-        # seen in production as "Unhandled exception in client_connected_cb", with
-        # handle_public's finally releasing the player's slot while the other
-        # direction of the session was still piping.
+        # OSError, not just ConnectionReset/BrokenPipe: ssl.SSLError is one too, and
+        # escaping here released the player's slot while the other direction was still
+        # piping.
         pass
     finally:
         writer.close()
@@ -474,15 +348,10 @@ async def pipe(reader, writer):
 
 async def handle_public(reader, writer):
     peer = writer.get_extra_info("peername")
-    peer_ip = peer[0] if peer else None
-    if _rate_limited(peer_ip):
-        writer.close()
-        return
-    # Held for this whole call, including the piped session that follows - a real
-    # player's connection legitimately counts against their source IP's quota here,
-    # same as any other raw socket against this relay.
-    if not _acquire_conn_slot(peer_ip):
-        writer.close()
+    # The slot is held for this whole call, including the piped session that follows
+    # - a real player's connection counts against their source IP's quota too.
+    peer_ip, admitted = _admit(writer)
+    if not admitted:
         return
     subdomain = None
     reserved_pending_slot = False
@@ -498,15 +367,12 @@ async def handle_public(reader, writer):
             print(f"[public] {peer}: no backend registered for {server_address!r}", flush=True)
             return
 
-        # Only covers the negotiation below (waiting on this specific backend's
-        # data_hello) - deliberately released before piping starts, so this caps how
-        # many simultaneous fake "connect" attempts one subdomain's tunnel client can
-        # be hit with (regardless of how many source IPs they're spread across),
-        # without limiting how many real players it can actually serve at once.
-        if pending_by_subdomain.get(subdomain, 0) >= MAX_PENDING_PER_SUBDOMAIN:
+        # Only covers the negotiation below and is released before piping, so it caps
+        # simultaneous fake connects per subdomain without limiting real players.
+        if pending_by_subdomain[subdomain] >= MAX_PENDING_PER_SUBDOMAIN:
             print(f"[public] {peer}: too many in-flight connections for {subdomain!r} - dropping", flush=True)
             return
-        pending_by_subdomain[subdomain] = pending_by_subdomain.get(subdomain, 0) + 1
+        pending_by_subdomain[subdomain] += 1
         reserved_pending_slot = True
 
         conn_id = str(uuid.uuid4())
@@ -526,22 +392,15 @@ async def handle_public(reader, writer):
             print(f"[public] {peer}: backend for {subdomain!r} didn't respond in time", flush=True)
             return
         finally:
-            pending_by_subdomain[subdomain] -= 1
-            if pending_by_subdomain[subdomain] <= 0:
-                del pending_by_subdomain[subdomain]
+            _decrement(pending_by_subdomain, subdomain)
             reserved_pending_slot = False
 
         try:
             data_writer.write(raw)
             await asyncio.wait_for(data_writer.drain(), timeout=HANDSHAKE_TIMEOUT)
         except Exception:
-            # The backend accepted the data connection but then reset/stalled right
-            # as we tried to replay the buffered handshake into it - a real,
-            # reachable race (confirmed by review, not just theoretical), not just
-            # the player's own socket. Without this, an exception here skips
-            # straight to `finally`, which only ever closed `writer` (the public
-            # socket) - data_writer was never closed anywhere else on this path and
-            # would leak, relying on GC to eventually reclaim it.
+            # The backend can reset or stall right as the handshake is replayed; close
+            # data_writer here or it leaks.
             data_writer.close()
             return
 
@@ -552,45 +411,30 @@ async def handle_public(reader, writer):
         )
     finally:
         if reserved_pending_slot and subdomain:
-            pending_by_subdomain[subdomain] -= 1
-            if pending_by_subdomain[subdomain] <= 0:
-                del pending_by_subdomain[subdomain]
+            _decrement(pending_by_subdomain, subdomain)
         _release_conn_slot(peer_ip)
         writer.close()
 
 
 def _write_status_snapshot(start_time):
-    # Write-then-rename, same pattern as users.py/auto_assignments.py - admin_cli.py
-    # reads this file from a completely separate process, so a reader can never see
-    # a half-written snapshot.
     snapshot = {
         "updated_at": time.time(),
         "uptime_seconds": round(time.monotonic() - start_time, 1),
         "connected_subdomains": sorted(clients.keys()),
         "concurrent_connections_by_ip": dict(conn_counts),
     }
-    tmp_path = STATUS_PATH.with_suffix(".json.tmp")
-    tmp_path.write_text(json.dumps(snapshot, indent=2), encoding="utf-8")
-    os.replace(tmp_path, STATUS_PATH)
+    write_json_atomic(STATUS_PATH, snapshot)
 
 
 async def _background_loop(start_time):
-    """Runs for the relay's whole lifetime: refreshes the status snapshot on every
-    tick, and sweeps stale conn_attempts entries every CLEANUP_INTERVAL - one task
-    instead of two separate timers, since the status-write cadence is already
-    frequent enough to piggyback the much-less-frequent cleanup on top of."""
+    """Runs for the relay's lifetime: refreshes the status snapshot every tick and
+    sweeps stale conn_attempts every CLEANUP_INTERVAL."""
     last_cleanup = time.monotonic()
     while True:
         await asyncio.sleep(STATUS_WRITE_INTERVAL)
         try:
-            # This coroutine runs inside the same top-level asyncio.gather() as the
-            # three real servers (see main()) - unlike every per-connection handler,
-            # which is its own isolated Task and can't bring the process down, an
-            # unhandled exception here (a transient disk-full/permissions error
-            # writing the status file, however rare) would propagate out of gather()
-            # and crash the entire relay, dropping every live connection, just to
-            # skip one status-file write. Not worth that risk for a purely
-            # informational admin feature.
+            # This runs in the same gather() as the servers, so an exception here (a
+            # disk-full status write) would crash the whole relay.
             _write_status_snapshot(start_time)
 
             now = time.monotonic()
@@ -609,13 +453,9 @@ DEFAULT_TLS_KEY = Path(__file__).resolve().parent / "certs" / "privkey.pem"
 
 
 def _build_tls_context(cert_path, key_path):
-    """The control/data channels carry per-user tokens and are open to the whole
-    internet with no other transport security - TLS here is mandatory, not
-    optional, matching that this project moved to a real cert rather than adding
-    an opt-in flag that would leave the plaintext gap open by default. The public
-    Minecraft port (:25565) deliberately does NOT get wrapped here - that's raw
-    Minecraft protocol traffic to vanilla clients, which have no concept of TLS at
-    the transport layer and would simply fail to connect at all if it were."""
+    """The control/data channels carry per-user tokens over the internet, so TLS is
+    mandatory. The public Minecraft port stays plain - vanilla clients don't speak
+    TLS."""
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     context.load_cert_chain(certfile=str(cert_path), keyfile=str(key_path))
     return context
@@ -639,12 +479,8 @@ async def main():
         )
     tls_context = _build_tls_context(args.tls_cert, args.tls_key)
 
-    # No ssl= here for control/data - handle_control/handle_data do the TLS upgrade
-    # themselves (_upgrade_to_tls), specifically so the rate limiter/connection cap
-    # run against every raw connection attempt, not just ones that complete a valid
-    # handshake (asyncio.start_server(..., ssl=...) would only invoke the callback
-    # after a successful handshake, letting anything that fails one bypass both
-    # protections entirely - confirmed as a real gap, not hypothetical).
+    # No ssl= for control/data - see tls_context: TLS is upgraded in the handlers so the
+    # rate limit and connection cap see every raw connection.
     control_server = await asyncio.start_server(handle_control, args.bind, args.control_port)
     data_server = await asyncio.start_server(handle_data, args.bind, args.data_port)
     public_server = await asyncio.start_server(handle_public, args.bind, args.public_port)

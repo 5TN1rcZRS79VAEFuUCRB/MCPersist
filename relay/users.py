@@ -3,10 +3,9 @@ admin_cli.py and checked by relay_server.py during registration."""
 
 import hmac
 import json
-import os
 from pathlib import Path
 
-from auto_assignments import keep_owner
+from auto_assignments import write_json_atomic
 
 USERS_PATH = Path(__file__).resolve().parent / "users.json"
 
@@ -18,13 +17,7 @@ def load_users():
 
 
 def save_users(users):
-    # Write-then-rename: os.replace is atomic, so a crash mid-write (admin_cli.py is
-    # run interactively, but the relay itself could still be killed at a bad moment)
-    # can't leave a truncated file that breaks every registration until fixed by hand.
-    tmp_path = USERS_PATH.with_suffix(".json.tmp")
-    tmp_path.write_text(json.dumps(users, indent=2), encoding="utf-8")
-    keep_owner(tmp_path, USERS_PATH)
-    os.replace(tmp_path, USERS_PATH)
+    write_json_atomic(USERS_PATH, users)
 
 
 def add_user(subdomain, token):

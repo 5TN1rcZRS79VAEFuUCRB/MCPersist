@@ -23,9 +23,7 @@ DEFAULTS = {
     "rcon_port": 25575,
     "rcon_password": None,
     "join_address": None,
-    # A real hostname, not a bare IP - the control/data channels are TLS now (see
-    # relay/relay_server.py), and TLS certificate verification needs a hostname to
-    # check the cert against (SNI), which a bare IP can't provide.
+    # A hostname, not a bare IP: TLS certificate verification needs one.
     "relay_host": "relay.mcpersist.com",
     "relay_control_port": 7000,
     "relay_data_port": 7001,
@@ -41,26 +39,12 @@ def load():
     # utf-8-sig transparently strips a BOM if present (e.g. from Notepad) without
     # affecting plain utf-8 files, so hand-edited config.json can't crash startup.
     data = json.loads(CONFIG_PATH.read_text(encoding="utf-8-sig"))
-    merged = dict(DEFAULTS)
-    merged.update(data)
-    # Migration: a config saved before java_auto existed, with "java_path" already
-    # pointed at something specific, was a deliberate choice - don't silently start
-    # treating it as auto-managed (and potentially downloading/switching to a
-    # different Java under it) just because the new field defaults to True.
-    if "java_auto" not in data and data.get("java_path") not in (None, "java"):
-        merged["java_auto"] = False
-    return merged
+    return {**DEFAULTS, **data}
 
 
 def save(cfg):
-    # Write-then-rename, not a direct write: os.replace is atomic, so a crash or
-    # power loss mid-write can't leave a truncated/corrupt config.json behind -
-    # which would otherwise break every future launch until someone notices and
-    # fixes it by hand. Same pattern already used for relay/users.json and
-    # auto_assignments.json; config.json is the single most-written file in the
-    # whole app (every RAM/performance save, every setup, every relay config
-    # change) and holds the rcon password and relay token, so it's worth the same
-    # protection those already have.
+    # Write-then-rename: os.replace is atomic, so a crash mid-write can't leave a
+    # truncated config.json that breaks every launch.
     tmp_path = CONFIG_PATH.with_suffix(".json.tmp")
     tmp_path.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
     os.replace(tmp_path, CONFIG_PATH)
@@ -79,16 +63,16 @@ def new_rcon_password():
 MIN_MEMORY_GB = 2  # below this, a Java-based Minecraft server generally can't boot reliably
 
 
-def suggest_memory_mb():
-    """A background-persistent server on the user's own PC has to share it with
-    everything else they're doing (gaming, browsing) - unlike a dedicated headless
-    box. A small friend-group survival world rarely benefits much from a big heap
-    regardless of how much RAM the machine has, so this is a flat, low-ceiling table
-    rather than a percentage split - the goal is "enough for Minecraft," not "half
-    the machine," so most of the RAM stays free for whatever else is running."""
+def total_ram_gb():
     import psutil
 
-    total_gb = max(1, int(psutil.virtual_memory().total / (1024**3)))
+    return max(1, int(psutil.virtual_memory().total / (1024**3)))
+
+
+def suggest_memory_mb():
+    """A flat, low-ceiling table rather than a share of total RAM: the server shares the
+    PC with everything else, and a small world rarely benefits from a big heap."""
+    total_gb = total_ram_gb()
     if total_gb <= 4:
         suggested_gb = max(MIN_MEMORY_GB, total_gb - 1)
     elif total_gb <= 8:
@@ -103,14 +87,9 @@ def suggest_memory_mb():
 
 
 def suggest_view_distance():
-    """View/simulation distance are CPU-bound (each extra ring is a lot more chunks to
-    generate and tick), and like the RAM sizing above, this server shares the CPU with
-    everything else the user is doing rather than owning a dedicated box - so this
-    favors running smoothly alongside other things over maxing out what the hardware
-    could technically do."""
-    import psutil
-
-    cores = psutil.cpu_count(logical=True) or 4
+    """CPU-bound, and the server shares the CPU with everything else - so this favours
+    running smoothly over maxing out the hardware."""
+    cores = os.cpu_count() or 4
     if cores <= 4:
         return 6
     elif cores <= 8:
@@ -122,9 +101,8 @@ def suggest_view_distance():
 
 
 def suggest_simulation_distance():
-    # Simulation distance drives entity/redstone/etc. ticking, which is more expensive
-    # per-chunk than just rendering terrain - keep it a bit tighter than view distance
-    # rather than matching it 1:1.
+    # Simulation distance drives ticking, which costs more per chunk than rendering -
+    # keep it a bit below view distance.
     return max(4, suggest_view_distance() - 2)
 
 
@@ -133,31 +111,26 @@ MIN_SIMULATION_DISTANCE = 2
 MAX_DISTANCE = 32  # Minecraft's own ceiling for both
 
 
-def ensure_view_distance(cfg):
-    """Same auto/manual resolution as ensure_memory_mb: freshly recomputed from
-    current specs when performance_auto is on, otherwise the user's explicit choice
-    (clamped to [MIN_VIEW_DISTANCE, MAX_DISTANCE] regardless - the GUI's spinbox
-    already enforces this range, but config.json can be hand-edited outside it)."""
+def _resolve_distance(cfg, key, suggest, minimum):
+    """Freshly recomputed from current specs when performance_auto is on, otherwise the
+    user's choice - clamped either way, since config.json can be hand-edited."""
     if cfg.get("performance_auto", True):
-        return suggest_view_distance()
-    value = cfg.get("view_distance") or suggest_view_distance()
-    return min(MAX_DISTANCE, max(MIN_VIEW_DISTANCE, value))
+        return suggest()
+    return min(MAX_DISTANCE, max(minimum, cfg.get(key) or suggest()))
+
+
+def ensure_view_distance(cfg):
+    return _resolve_distance(cfg, "view_distance", suggest_view_distance, MIN_VIEW_DISTANCE)
 
 
 def ensure_simulation_distance(cfg):
-    if cfg.get("performance_auto", True):
-        return suggest_simulation_distance()
-    value = cfg.get("simulation_distance") or suggest_simulation_distance()
-    return min(MAX_DISTANCE, max(MIN_SIMULATION_DISTANCE, value))
+    return _resolve_distance(cfg, "simulation_distance", suggest_simulation_distance, MIN_SIMULATION_DISTANCE)
 
 
 def ensure_memory_mb(cfg):
-    """Resolves the memory allocation to use right now. When memory_auto is on
-    (the default), this is always freshly computed from current specs - not just
-    once - so it stays correct even if the machine's hardware changes later. When
-    off, uses the user's explicit memory_mb choice, with the MIN_MEMORY_GB floor
-    enforced regardless (a Java-based Minecraft server generally can't boot reliably
-    below that, even if someone hand-edits config.json to something lower)."""
+    """Freshly computed from current specs when memory_auto is on, otherwise the user's
+    memory_mb - with the MIN_MEMORY_GB floor enforced either way, since config.json
+    can be hand-edited."""
     if cfg.get("memory_auto", True):
         return suggest_memory_mb()
     mb = cfg.get("memory_mb") or suggest_memory_mb()

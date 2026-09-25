@@ -33,13 +33,8 @@ def cmd_add(args):
             "whoever has the current one - re-run with --force if that's what you want."
         )
         return
-    # Auto (unreserved) clients get a persistent subdomain tied to their source IP
-    # that never expires on its own (see relay_server.get_or_assign_subdomain) -
-    # without this check, reserving that same name here would silently create two
-    # registrations racing for one subdomain: whichever one is currently connected
-    # wins, and the other gets rejected with "already connected elsewhere" forever
-    # (the auto client reconnects with backoff indefinitely), with no way to tell
-    # from `add-user`'s own output that this happened.
+    # Auto clients keep an IP-tied subdomain forever; reserving the same name too would
+    # leave two registrations fighting over it, one rejected indefinitely.
     assignments = load_assignments()
     auto_owner_ip = next((ip for ip, sub in assignments.items() if sub == args.subdomain), None)
     if auto_owner_ip:
@@ -61,10 +56,8 @@ def cmd_add(args):
 
 
 def cmd_release_auto(args):
-    # Same lock relay_server.get_or_assign_subdomain holds for its own
-    # load-decide-save cycle - without it, this read-modify-write racing against
-    # the relay auto-assigning a brand-new IP at the same instant could silently
-    # clobber that new assignment right back out of the file.
+    # Same lock the relay holds while auto-assigning, so this can't clobber a new
+    # assignment.
     with auto_assignments_locked():
         assignments = load_assignments()
         owner_ip = next((ip for ip, sub in assignments.items() if sub == args.subdomain), None)

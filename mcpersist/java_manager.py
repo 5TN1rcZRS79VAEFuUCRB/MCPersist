@@ -1,14 +1,10 @@
-"""Auto-downloads a matching Eclipse Temurin JRE from Adoptium's public API when the
-Java version a world needs isn't already available - similar to how launchers like
-Prism manage their own bundled Java installs, so users don't have to go hunt down and
-install the right JDK themselves."""
+"""Auto-downloads a matching Eclipse Temurin JRE from Adoptium when the Java version a
+world needs isn't already available, like launchers such as Prism do."""
 
 import shutil
 import zipfile
 
-import requests
-
-from . import javacheck
+from . import javacheck, net
 from .paths import BIN_DIR
 
 DOWNLOAD_URL = "https://api.adoptium.net/v3/binary/latest/{major}/ga/windows/x64/jre/hotspot/normal/eclipse"
@@ -18,11 +14,9 @@ def portable_java_exe(major):
     return BIN_DIR / f"java{major}" / "bin" / "java.exe"
 
 
-def _safe_extract(zf, dest_dir):
-    """zipfile.extractall() doesn't guard against a "zip slip" archive whose entry
-    names contain ../ sequences that resolve outside dest_dir - Adoptium's API is a
-    trusted, pinned, HTTPS source, so this is defense-in-depth rather than a live
-    threat, but it's cheap to just not trust archive contents by default."""
+def safe_extract(zf, dest_dir):
+    """extractall(), refusing (before writing anything) any "zip slip" entry whose
+    ../ path would land outside dest_dir. Defense-in-depth for downloaded archives."""
     dest_dir = dest_dir.resolve()
     for member in zf.infolist():
         target = (dest_dir / member.filename).resolve()
@@ -39,21 +33,15 @@ def download_java(major):
     tmp_zip = BIN_DIR / f"java{major}_download.zip"
     extract_dir = BIN_DIR / f"java{major}_extract_tmp"
 
-    resp = requests.get(DOWNLOAD_URL.format(major=major), stream=True, timeout=120)
-    resp.raise_for_status()
-    with open(tmp_zip, "wb") as f:
-        for chunk in resp.iter_content(chunk_size=1 << 16):
-            f.write(chunk)
-
+    tmp_zip = net.download_to_part(DOWNLOAD_URL.format(major=major), tmp_zip)
     if extract_dir.exists():
         shutil.rmtree(extract_dir)
     with zipfile.ZipFile(tmp_zip) as zf:
-        _safe_extract(zf, extract_dir)
+        safe_extract(zf, extract_dir)
     tmp_zip.unlink()
 
-    # The zip contains one top-level folder (e.g. "jdk-21.0.5+11-jre") whose exact
-    # name changes with every patch release - move its contents to a stable,
-    # version-agnostic path instead of depending on that name.
+    # The zip's single top-level folder is named per patch release - move it to a stable
+    # path.
     inner = next(p for p in extract_dir.iterdir() if p.is_dir())
     if dest_dir.exists():
         shutil.rmtree(dest_dir)
@@ -67,14 +55,13 @@ def download_java(major):
 
 
 def ensure_java(required_major):
-    """Returns a working java.exe path for the given major version - preferring
-    whatever's already available (a previously downloaded portable JRE, or a matching
-    system install already on PATH) over downloading a new one."""
+    """A working java.exe for the given major version, preferring a previously
+    downloaded JRE or a matching system Java over a new download."""
     portable = portable_java_exe(required_major)
     if portable.exists():
         return str(portable)
 
-    system_java = javacheck.find_java("java")
+    system_java = shutil.which("java")
     if system_java and javacheck.detected_major_version("java") == required_major:
         return system_java
 

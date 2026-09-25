@@ -1,6 +1,7 @@
 """The GUI's screens (status, setup wizard) as PySide6 widgets - all logic delegates
 to actions.py/setup_flow.py, same as the CLI."""
 
+import os
 import subprocess
 
 from PySide6.QtCore import Qt, QSize, QTimer, Signal
@@ -25,8 +26,8 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtGui import QGuiApplication
 
-from . import actions, config, server_vanilla, setup_flow, update_checker
-from .gui_worker import Worker, WorkerError
+from . import actions, config, server_vanilla, setup_flow, update_checker, world
+from .gui_worker import Worker, error_text
 from .paths import BASE_DIR
 from .version import VERSION
 
@@ -35,44 +36,53 @@ def _open_folder(path):
     subprocess.Popen(["explorer", str(path)])
 
 
+MUTED = "color: #888;"
+WARN = "color: #b45309;"
+
+
+def _label(text="", style="", wrap=False):
+    label = QLabel(text)
+    label.setStyleSheet(style)
+    label.setWordWrap(wrap)
+    return label
+
+
+def _start_steps(cfg, server_dir):
+    return [actions.start_server(cfg, server_dir), actions.start_tunnel(cfg, server_dir)]
+
+
+def _stop_steps(cfg, server_dir):
+    return [actions.stop_server(cfg, server_dir), actions.stop_tunnel(server_dir)]
+
+
+def _fit_window(page):
+    """Re-fits the window after a page shows, hides or rewords something - the
+    window only re-measures on its own when switching pages. Guarded so a page can
+    run standalone (outside MainWindow) in tests."""
+    window = page.window()
+    if hasattr(window, "fit_to_current_page"):
+        window.fit_to_current_page()
+
+
 class StatusPage(QWidget):
     go_to_setup = Signal()
 
     def sizeHint(self):
-        # Reports the actual content's natural size, not the QScrollArea's own
-        # generic default sizeHint (a small, fixed suggestion unrelated to what's
-        # inside it) - MainWindow.fit_to_current_page relies on this to size the
-        # window to fit real content when it's short enough to (capping it at 780
-        # regardless, with the scroll area handling whatever doesn't fit past that).
+        # The content's natural size, not QScrollArea's small generic default -
+        # fit_to_current_page sizes the window from it.
         return self._content.sizeHint()
 
     def minimumSizeHint(self):
-        # A plain QScrollArea's own minimumSizeHint doesn't reflect its child
-        # widget's minimum size (it's a small, generic default) - without this
-        # override, MainWindow could be dragged narrower than the World/Memory/
-        # Performance button rows actually need, cramming or clipping them
-        # horizontally, undoing the width fix from a prior round. Deliberately
-        # keeps the height low (not the content's full minimum height) - forcing
-        # that back up would defeat the entire point of the QScrollArea, which
-        # exists specifically so the window CAN be shorter than its content, with
-        # a scrollbar for the rest, instead of being forced tall or clipped.
+        # The content's minimum width, so the window can't be dragged narrower than the
+        # button rows need - but a low height, so the scroll area can still make the
+        # window shorter than its content.
         return QSize(self._content.minimumSizeHint().width(), 200)
 
     def __init__(self):
         super().__init__()
-        # Everything below lives in an inner widget wrapped in a QScrollArea,
-        # instead of laid out directly on `self` - this page has grown a lot
-        # (update banner, status, World/Memory/Performance groups, each with its
-        # own wrapped detected-specs/message labels), and the window's own height
-        # is deliberately capped (see MainWindow.fit_to_current_page) rather than
-        # growing to fit arbitrarily tall content. A long action_msg (the
-        # start/stop result, which includes full log file paths and wraps to
-        # several lines - exactly what's on screen right after clicking Start) or
-        # simply a taller stack of sections than fits under that cap previously
-        # had nowhere to go but off the bottom edge, silently clipped with no way
-        # to scroll to it. A QScrollArea makes "content taller than the window"
-        # degrade to a scrollbar instead of lost/overlapping text, regardless of
-        # font size, DPI scaling, or how much more this page grows later.
+        # Everything sits in a QScrollArea: the window's height is capped, so content
+        # taller than that (a long start/stop message, a big font or DPI) scrolls
+        # instead of being clipped.
         outer_layout = QVBoxLayout(self)
         outer_layout.setContentsMargins(0, 0, 0, 0)
         self._content = QWidget()
@@ -90,19 +100,14 @@ class StatusPage(QWidget):
         self.update_box = QWidget()
         update_row = QHBoxLayout(self.update_box)
         update_row.setContentsMargins(0, 0, 0, 0)
-        self.update_label = QLabel("")
-        self.update_label.setStyleSheet("color: #2ecc71; font-weight: bold;")
+        self.update_label = _label(style="color: #2ecc71; font-weight: bold;")
         update_row.addWidget(self.update_label, 1)
         self.update_btn = QPushButton("Update Now")
         self.update_btn.setFixedWidth(110)
         self.update_btn.clicked.connect(self.on_update_now)
         update_row.addWidget(self.update_btn)
-        # Only shown alongside the failure banner - check_last_update_failure()
-        # already captures the real reason (every step the updater script logged,
-        # or the exact "exited immediately" error from update_checker.apply_update)
-        # but nothing ever surfaced it beyond a generic "it failed" message. Without
-        # this, diagnosing *why* an update failed on someone else's machine meant
-        # asking them to go find a temp log file by hand.
+        # Shown with the failure banner: what the updater actually logged, instead of
+        # asking someone to find a temp log file.
         self.update_details_btn = QPushButton("Details")
         self.update_details_btn.setFixedWidth(70)
         self.update_details_btn.clicked.connect(self.show_update_failure_details)
@@ -111,25 +116,18 @@ class StatusPage(QWidget):
         self.update_box.setVisible(False)
         layout.addWidget(self.update_box)
         self._pending_update = None
-        # A leftover log here means the updater helper script ran last time and
-        # failed partway through (see update_checker._UPDATER_PS1) - the app would
-        # have just closed with no explanation, since the failure happened in a
-        # detached process after this one already quit. Check once, up front, so
-        # that gets surfaced instead of the user just seeing "update available"
-        # again with no idea anything went wrong last time.
+        # A leftover log means the detached updater failed after we quit - report it
+        # once, up front.
         self._last_update_failure = update_checker.check_last_update_failure()
-        # The success-case counterpart to the failure check above - otherwise a
-        # completed update gives zero feedback on the other side of the restart
-        # either, which was a big part of why the whole thing looked like the app
-        # just closed rather than doing something intentional.
+        # And the success case, so a completed update doesn't look like the app just
+        # closed.
         self._just_updated_to = update_checker.check_update_success()
 
         # ----- Status group -----
         status_box = QGroupBox()
         status_layout = QVBoxLayout(status_box)
 
-        self.world_label = QLabel("No world configured yet")
-        self.world_label.setStyleSheet("font-weight: bold; font-size: 16px;")
+        self.world_label = _label("No world configured yet", style="font-weight: bold; font-size: 16px;")
         status_layout.addWidget(self.world_label)
 
         state_row = QHBoxLayout()
@@ -153,21 +151,15 @@ class StatusPage(QWidget):
         addr_row.addWidget(self.address_label, 1)
         addr_row.addWidget(copy_btn)
         status_layout.addLayout(addr_row)
-        self.address_hint = QLabel("")
-        self.address_hint.setWordWrap(True)
-        self.address_hint.setStyleSheet("color: #b45309;")
+        self.address_hint = _label(style=WARN, wrap=True)
         self.address_hint.setVisible(False)
         status_layout.addWidget(self.address_hint)
 
-        # Whitelist doesn't get its own section - it's just a status/warning, not
-        # something with its own actions to take (management is real Minecraft
-        # commands, not a GUI control), so it lives here with the rest of the status.
-        self.whitelist_warning = QLabel("")
-        self.whitelist_warning.setWordWrap(True)
-        self.whitelist_warning.setStyleSheet("color: #e74c3c; font-weight: bold;")
+        # The whitelist is just a status and warning here - managing it is Minecraft
+        # commands.
+        self.whitelist_warning = _label(style="color: #e74c3c; font-weight: bold;", wrap=True)
         status_layout.addWidget(self.whitelist_warning)
-        whitelist_hint = QLabel("Friends can't join? Use /whitelist commands in Minecraft.")
-        whitelist_hint.setStyleSheet("color: #888;")
+        whitelist_hint = _label("Friends can't join? Use /whitelist commands in Minecraft.", style=MUTED)
         status_layout.addWidget(whitelist_hint)
 
         layout.addWidget(status_box)
@@ -178,22 +170,20 @@ class StatusPage(QWidget):
         self.start_btn = QPushButton("Start")
         self.stop_btn = QPushButton("Stop")
         self.restart_btn = QPushButton("Restart")
-        self.start_btn.clicked.connect(self.on_start)
-        self.stop_btn.clicked.connect(self.on_stop)
-        self.restart_btn.clicked.connect(self.on_restart)
-        for b in (self.start_btn, self.stop_btn, self.restart_btn):
+        for b, verb, steps in (
+            (self.start_btn, "Starting", _start_steps),
+            (self.stop_btn, "Stopping", _stop_steps),
+            (self.restart_btn, "Restarting", lambda cfg, d: _stop_steps(cfg, d) + _start_steps(cfg, d)),
+        ):
+            b.clicked.connect(lambda _=False, verb=verb, steps=steps: self._run_on_world(verb, steps))
             b.setMinimumHeight(34)
             btn_row.addWidget(b)
         layout.addLayout(btn_row)
 
-        self.action_msg = QLabel("")
-        self.action_msg.setStyleSheet("color: #888;")
+        # Wrapped: start/stop results include full log paths, which otherwise stretch
+        # the window wider for good.
+        self.action_msg = _label(style=MUTED, wrap=True)
         self.action_msg.setAlignment(Qt.AlignCenter)
-        # Unlike every other status label in this file, this one was missing
-        # setWordWrap - _on_action_done joins the start/stop results (which include
-        # full log file paths) into one unwrapped string, which was stretching the
-        # whole window wider to fit it on one line and never shrinking back after.
-        self.action_msg.setWordWrap(True)
         layout.addWidget(self.action_msg)
 
         # ----- World group -----
@@ -203,26 +193,18 @@ class StatusPage(QWidget):
         setup_btn.clicked.connect(self.go_to_setup.emit)
         world_layout.addWidget(setup_btn)
 
-        # For recovering worlds left behind in an old install folder - e.g. after
-        # a manual reinstall (done by hand because self-update failed) into a
-        # fresh folder that doesn't have the old servers/config.json in it. Each
-        # world folder is fully self-contained, so this is just a folder copy;
-        # "Switch to a Previously Set-Up Server" (in the setup wizard) is what
-        # actually makes an imported one active.
+        # Recovers worlds from an old install folder (say, after a manual reinstall).
+        # Each world folder is self-contained, so it's a folder copy; "Switch to a
+        # Previously Set-Up Server" makes one active.
         self.recover_btn = QPushButton("Recover Worlds from Old Install...")
         self.recover_btn.clicked.connect(self.on_recover_from_old_install)
         world_layout.addWidget(self.recover_btn)
 
         folder_row = QHBoxLayout()
-        open_world_btn = QPushButton("Server Folder")
-        open_world_btn.clicked.connect(self.open_world_folder)
-        open_mods_btn = QPushButton("Mods Folder")
-        open_mods_btn.clicked.connect(self.open_mods_folder)
-        open_logs_btn = QPushButton("View Logs")
-        open_logs_btn.clicked.connect(self.open_logs)
-        folder_row.addWidget(open_world_btn)
-        folder_row.addWidget(open_mods_btn)
-        folder_row.addWidget(open_logs_btn)
+        for label, sub in (("Server Folder", ""), ("Mods Folder", "mods"), ("View Logs", "logs")):
+            folder_btn = QPushButton(label)
+            folder_btn.clicked.connect(lambda _=False, sub=sub: self._open_server_subdir(sub))
+            folder_row.addWidget(folder_btn)
         world_layout.addLayout(folder_row)
         layout.addWidget(world_box)
 
@@ -230,9 +212,7 @@ class StatusPage(QWidget):
         memory_box = QGroupBox("Memory")
         memory_layout = QVBoxLayout(memory_box)
 
-        self.ram_detected_label = QLabel("")
-        self.ram_detected_label.setStyleSheet("color: #888;")
-        self.ram_detected_label.setWordWrap(True)
+        self.ram_detected_label = _label(style=MUTED, wrap=True)
         memory_layout.addWidget(self.ram_detected_label)
 
         ram_row = QHBoxLayout()
@@ -248,9 +228,7 @@ class StatusPage(QWidget):
         ram_row.addWidget(ram_save_btn)
         memory_layout.addLayout(ram_row)
 
-        self.ram_msg = QLabel("")
-        self.ram_msg.setWordWrap(True)
-        self.ram_msg.setStyleSheet("color: #b45309;")
+        self.ram_msg = _label(style=WARN, wrap=True)
         memory_layout.addWidget(self.ram_msg)
         layout.addWidget(memory_box)
 
@@ -258,9 +236,7 @@ class StatusPage(QWidget):
         perf_box = QGroupBox("Performance")
         perf_layout = QVBoxLayout(perf_box)
 
-        self.perf_detected_label = QLabel("")
-        self.perf_detected_label.setStyleSheet("color: #888;")
-        self.perf_detected_label.setWordWrap(True)
+        self.perf_detected_label = _label(style=MUTED, wrap=True)
         perf_layout.addWidget(self.perf_detected_label)
 
         perf_auto_row = QHBoxLayout()
@@ -283,15 +259,12 @@ class StatusPage(QWidget):
         perf_row.addWidget(perf_save_btn)
         perf_layout.addLayout(perf_row)
 
-        self.perf_msg = QLabel("")
-        self.perf_msg.setWordWrap(True)
-        self.perf_msg.setStyleSheet("color: #b45309;")
+        self.perf_msg = _label(style=WARN, wrap=True)
         perf_layout.addWidget(self.perf_msg)
         layout.addWidget(perf_box)
 
         layout.addStretch()
-        version_label = QLabel(f"MCPersist v{VERSION}")
-        version_label.setStyleSheet("color: #888;")
+        version_label = _label(f"MCPersist v{VERSION}", style=MUTED)
         version_label.setAlignment(Qt.AlignRight)
         layout.addWidget(version_label)
 
@@ -300,12 +273,8 @@ class StatusPage(QWidget):
 
         self._worker = None
         self._recover_worker = None
-        # A single reusable timer, not a fresh QTimer.singleShot(...) per call -
-        # start() on an already-running QTimer resets it rather than stacking a
-        # second one, so triggering a new action (Start right after Stop, say)
-        # while the previous one's message is still showing replaces the pending
-        # clear instead of leaving the OLD one to fire on schedule and blank the
-        # NEW message several seconds early.
+        # One reusable timer: start() resets it, so a new message isn't blanked early by
+        # the previous one's pending clear.
         self._action_msg_clear_timer = QTimer(self)
         self._action_msg_clear_timer.setSingleShot(True)
         self._action_msg_clear_timer.timeout.connect(lambda: self.action_msg.setText(""))
@@ -316,26 +285,16 @@ class StatusPage(QWidget):
 
         # Checked once on startup, not on every poll - a GitHub API call every 4s
         # would be wasteful and risks hitting its rate limit for no benefit.
+        self._check_for_update()
+
+    def _check_for_update(self):
         self._update_worker = Worker(update_checker.check_latest_release)
         self._update_worker.finished_result.connect(self._on_update_check_done)
         self._update_worker.start()
 
-    def _resize_window_to_fit(self):
-        """Showing, hiding or re-wording the update banner changes how tall this
-        page's content is, but nothing was re-measuring the window afterwards - so
-        the extra height spilled past the window and the scroll area (added so tall
-        content is scrollable rather than clipped) put a scrollbar on the status
-        page just for displaying an update message. Re-fitting grows the window
-        those few pixels instead. Same helper SetupPage uses for its step
-        transitions, and guarded the same way since this page can be driven
-        standalone in tests."""
-        window = self.window()
-        if hasattr(window, "fit_to_current_page"):
-            window.fit_to_current_page()
-
     def _hide_update_box(self):
         self.update_box.setVisible(False)
-        self._resize_window_to_fit()
+        _fit_window(self)
 
     def _on_update_check_done(self, result):
         self._pending_update = result
@@ -344,7 +303,7 @@ class StatusPage(QWidget):
             self.update_label.setStyleSheet("color: #2ecc71; font-weight: bold;")
             self.update_label.setText(f"Updated to {self._just_updated_to} - all set.")
             self.update_btn.setVisible(False)
-            self._resize_window_to_fit()
+            _fit_window(self)
             QTimer.singleShot(8000, self._hide_update_box)
             return
         if self._last_update_failure:
@@ -356,15 +315,11 @@ class StatusPage(QWidget):
             )
             self.update_btn.setVisible(True)
             self.update_btn.setText("Try Again")
-            # Always enabled here, not just when `result` already found an update -
-            # check_latest_release() returns None both when we're genuinely current
-            # AND when the check itself failed (network blip, rate limit), so tying
-            # this to `result` could leave the one recovery button the user needs
-            # disabled for the rest of the session over a transient failure.
-            # on_update_now() re-runs the check itself if nothing's pending yet.
+            # Always enabled: None also means the check itself failed, and this is the
+            # one recovery button. on_update_now() re-checks if nothing's pending.
             self.update_btn.setEnabled(True)
             self.update_details_btn.setVisible(True)
-            self._resize_window_to_fit()
+            _fit_window(self)
             return
         if not result:
             return
@@ -374,7 +329,7 @@ class StatusPage(QWidget):
         self.update_btn.setText("Update Now")
         self.update_details_btn.setVisible(False)
         self.update_box.setVisible(True)
-        self._resize_window_to_fit()
+        _fit_window(self)
 
     def show_update_failure_details(self):
         box = QMessageBox(self)
@@ -386,29 +341,11 @@ class StatusPage(QWidget):
         box.exec()
 
     def on_update_now(self):
-        # Refused while the server or tunnel is up, and this is not a nicety: the
-        # tunnel client is a detached re-invocation of MCPersist.exe ITSELF (see
-        # tunnel_relay.py - sys.executable with a sentinel flag), and it
-        # deliberately outlives the GUI. So it holds the .exe and the loaded
-        # _internal DLLs open with writes denied for as long as it runs.
-        #
-        # The updater's Copy-Item is not atomic and not all-or-nothing: it copies
-        # files until it reaches the locked ones, then fails, leaving new _internal
-        # files beside the old exe - the classic PyInstaller won't-launch state. Its
-        # ten retries can't help, because the lock isn't transient the way an
-        # antivirus handle is; it lasts as long as the tunnel. And it would then
-        # report "old install left in place", which by that point isn't true.
-        #
-        # Stopping it automatically would be worse - a persistent server is the
-        # entire point of this app, so quietly killing someone's running world to
-        # install an update isn't ours to decide.
-        #
-        # Only the tunnel is checked, deliberately. The Minecraft server is java.exe
-        # and holds nothing of ours open, so an update with just the server up is
-        # genuinely safe: the GUI quits, the detached server keeps running exactly
-        # as it's designed to, and the relaunched app picks it back up from its pid
-        # file. Blocking that too would refuse a safe update and, worse, would have
-        # to give a reason that isn't true.
+        # Refused while the tunnel runs: it's MCPersist.exe itself and holds the .exe
+        # and _internal DLLs open, so the updater's copy would stop partway and leave an
+        # install that won't launch. Stopping someone's world automatically isn't ours
+        # to decide. The server (java.exe) holds nothing of ours, so updating with just
+        # the server up is safe.
         st, _, _ = self.current_status()
         if st and st["tunnel_running"]:
             self.update_label.setStyleSheet("color: #b45309; font-weight: bold;")
@@ -417,33 +354,30 @@ class StatusPage(QWidget):
                 "so it holds the file the update needs to replace."
             )
             self.update_btn.setEnabled(True)
-            self._resize_window_to_fit()
+            _fit_window(self)
             return
         if not self._pending_update:
-            # Reachable from the failure-recovery banner, where the button stays
-            # enabled even without a pending update (see _on_update_check_done) -
-            # re-run the check itself instead of silently doing nothing.
+            # From the failure banner, with no update pending - re-run the check instead
+            # of doing nothing.
             self.update_btn.setEnabled(False)
             self.update_label.setText("Checking for an update...")
-            self._resize_window_to_fit()
-            self._update_worker = Worker(update_checker.check_latest_release)
-            self._update_worker.finished_result.connect(self._on_update_check_done)
-            self._update_worker.start()
+            _fit_window(self)
+            self._check_for_update()
             return
         self.update_btn.setEnabled(False)
         self.update_label.setStyleSheet("color: #2ecc71; font-weight: bold;")
         self.update_label.setText("Downloading update...")
-        self._resize_window_to_fit()
+        _fit_window(self)
         self._update_apply_worker = Worker(update_checker.apply_update, self._pending_update["download_url"])
         self._update_apply_worker.finished_result.connect(self._on_update_applied)
         self._update_apply_worker.start()
 
     def _on_update_applied(self, result):
-        if isinstance(result, WorkerError):
+        if isinstance(result, Exception):
             self.update_btn.setEnabled(True)
             self.update_label.setStyleSheet("color: #e74c3c; font-weight: bold;")
-            self.update_label.setText(f"Update failed: {result.message}")
-            self._resize_window_to_fit()
+            self.update_label.setText(f"Update failed: {error_text(result)}")
+            _fit_window(self)
             return
         target_version = self._pending_update["version"]
         update_checker.mark_update_pending(target_version)
@@ -451,18 +385,11 @@ class StatusPage(QWidget):
             f"Updated to {target_version} - the window will close and reopen automatically "
             "in a moment. This is expected, not a crash."
         )
-        # This one is two lines of text, so it's the most likely of all of them to
-        # need the extra height - and it's the message the user actually sits and
-        # reads while the app closes itself.
-        self._resize_window_to_fit()
+        # Two lines of text - the message read while the app closes.
+        _fit_window(self)
         window = self.window()
-        # Without this, quit_app() below fires in the same instant as the label
-        # change above, so the label is never actually seen - the whole update
-        # just looks like the app closed for no reason. A couple of seconds is
-        # enough to register it before the window disappears. apply_update()
-        # already extracted and validated the new build into a staging directory
-        # before this ever ran, so what happens after quitting is just a fast
-        # directory copy + relaunch, not a fresh extraction that could still fail.
+        # Give the message time to be read before quitting; the update is already staged
+        # and validated, so what follows is a quick copy and relaunch.
         QTimer.singleShot(2500, window.quit_app)
 
     def current_status(self):
@@ -489,9 +416,7 @@ class StatusPage(QWidget):
             self.address_label.setText("-")
             self.address_hint.setVisible(False)
             self.address_hint.setText("")
-            self.start_btn.setEnabled(False)
-            self.stop_btn.setEnabled(False)
-            self.restart_btn.setEnabled(False)
+            self._set_action_buttons(False, False, False)
             return
 
         self.world_label.setText(f"{st['world_name']} ({st['loader']} {st['mc_version']})")
@@ -523,7 +448,7 @@ class StatusPage(QWidget):
         if hint != self.address_hint.text():
             self.address_hint.setText(hint)
             self.address_hint.setVisible(bool(hint))
-            self._resize_window_to_fit()
+            _fit_window(self)
 
         name_count = len(st["whitelist_names"])
         if st["whitelist_enabled"] is None:
@@ -545,19 +470,19 @@ class StatusPage(QWidget):
                 "server console or in-game as soon as possible."
             )
 
-        # The 4s poll lands mid-action (a start waits up to ~12s for the server, far
-        # longer if Java is downloading) and used to re-enable these, inviting a
-        # second Start/Stop while the first was still running.
+        # The 4s poll lands mid-action (a start can take ~12s, far longer if Java is
+        # downloading) - don't re-enable the buttons then.
         if self._action_running():
-            self.start_btn.setEnabled(False)
-            self.stop_btn.setEnabled(False)
-            self.restart_btn.setEnabled(False)
+            self._set_action_buttons(False, False, False)
             return
         both_up = st["server_running"] and st["tunnel_running"]
         both_down = not st["server_running"] and not st["tunnel_running"]
-        self.start_btn.setEnabled(not both_up)
-        self.stop_btn.setEnabled(not both_down)
-        self.restart_btn.setEnabled(True)
+        self._set_action_buttons(not both_up, not both_down, True)
+
+    def _set_action_buttons(self, start, stop, restart):
+        self.start_btn.setEnabled(start)
+        self.stop_btn.setEnabled(stop)
+        self.restart_btn.setEnabled(restart)
 
     def copy_address(self):
         text = self.address_label.text()
@@ -565,22 +490,17 @@ class StatusPage(QWidget):
             QGuiApplication.clipboard().setText(text)
 
     def _action_running(self):
-        # A flag rather than _worker.isRunning(): the result signal fires just
-        # before the thread actually exits, so isRunning() would still be True
-        # inside _on_action_done's refresh and leave the buttons off until the next
-        # poll.
+        # A flag, not _worker.isRunning(): the result signal fires just before the
+        # thread exits.
         return getattr(self, "_action_in_progress", False)
 
     def _run_blocking(self, verb, fn, *args):
-        # Replacing a still-running Worker drops the last reference to a live
-        # QThread (Qt aborts the app when one is destroyed while running) and runs
-        # two start/stop sequences against the same server at once.
+        # Replacing a running Worker destroys a live QThread (Qt aborts) and runs two
+        # start/stop sequences at once.
         if self._action_running():
             return
         self._action_in_progress = True
-        self.start_btn.setEnabled(False)
-        self.stop_btn.setEnabled(False)
-        self.restart_btn.setEnabled(False)
+        self._set_action_buttons(False, False, False)
         self.action_msg.setText(f"{verb}...")
         self._worker = Worker(fn, *args)
         self._worker.finished_result.connect(lambda results: self._on_action_done(verb, results))
@@ -588,9 +508,9 @@ class StatusPage(QWidget):
 
     def _on_action_done(self, verb, results):
         self._action_in_progress = False
-        if isinstance(results, WorkerError):
+        if isinstance(results, Exception):
             self.action_msg.setStyleSheet("color: #e74c3c;")
-            self.action_msg.setText(f"{verb} failed: {results.message}")
+            self.action_msg.setText(f"{verb} failed: {error_text(results)}")
             self.refresh()
             self._action_msg_clear_timer.start(10000)
             return
@@ -601,57 +521,16 @@ class StatusPage(QWidget):
         self.refresh()
         self._action_msg_clear_timer.start(4000 if all_ok else 10000)
 
-    def on_start(self):
+    def _run_on_world(self, verb, steps):
         _, cfg, server_dir = self.current_status()
-        if server_dir is None:
-            return
+        if server_dir is not None:
+            self._run_blocking(verb, steps, cfg, server_dir)
 
-        def do_start():
-            return [actions.start_server(cfg, server_dir), actions.start_tunnel(cfg, server_dir)]
-
-        self._run_blocking("Starting", do_start)
-
-    def on_stop(self):
-        _, cfg, server_dir = self.current_status()
-        if server_dir is None:
-            return
-
-        def do_stop():
-            return [actions.stop_server(cfg, server_dir), actions.stop_tunnel(server_dir)]
-
-        self._run_blocking("Stopping", do_stop)
-
-    def on_restart(self):
-        _, cfg, server_dir = self.current_status()
-        if server_dir is None:
-            return
-
-        def do_restart():
-            return [
-                actions.stop_server(cfg, server_dir),
-                actions.stop_tunnel(server_dir),
-                actions.start_server(cfg, server_dir),
-                actions.start_tunnel(cfg, server_dir),
-            ]
-
-        self._run_blocking("Restarting", do_restart)
-
-    def open_world_folder(self):
+    def _open_server_subdir(self, sub):
         _, _, server_dir = self.current_status()
         if server_dir is not None:
-            _open_folder(server_dir)
-
-    def open_mods_folder(self):
-        _, _, server_dir = self.current_status()
-        if server_dir is not None:
-            mods_dir = server_dir / "mods"
-            mods_dir.mkdir(exist_ok=True)
-            _open_folder(mods_dir)
-
-    def open_logs(self):
-        _, _, server_dir = self.current_status()
-        if server_dir is not None:
-            _open_folder(server_dir / "logs")
+            (server_dir / sub).mkdir(exist_ok=True)
+            _open_folder(server_dir / sub)
 
     def on_recover_from_old_install(self):
         folder = QFileDialog.getExistingDirectory(
@@ -661,13 +540,8 @@ class StatusPage(QWidget):
             return
         self.action_msg.setStyleSheet("color: #888;")
         self.action_msg.setText("Looking for worlds to recover...")
-        # Every other worker-launching action (Start/Stop/Restart, Finish Setup)
-        # disables its triggering control for the run's duration - this one didn't,
-        # so clicking it again mid-scan/copy would overwrite self._recover_worker
-        # with a new Worker before the first one (a QThread with no Qt parent) had
-        # finished, dropping the only reference still keeping it alive - the same
-        # hazard process_manager.py's _detached_procs list exists to avoid for
-        # Popen objects, just for a QThread instead.
+        # Disabled while running, like every other worker-launching control: replacing a
+        # running Worker would destroy a live QThread.
         self.recover_btn.setEnabled(False)
         self._recover_worker = Worker(setup_flow.import_worlds_from, folder)
         self._recover_worker.finished_result.connect(self._on_recover_done)
@@ -675,17 +549,15 @@ class StatusPage(QWidget):
 
     def _on_recover_done(self, result):
         self.recover_btn.setEnabled(True)
-        if isinstance(result, WorkerError):
+        if isinstance(result, Exception):
             self.action_msg.setStyleSheet("color: #e74c3c;")
-            self.action_msg.setText(f"Recovery failed: {result.message}")
+            self.action_msg.setText(f"Recovery failed: {error_text(result)}")
             return
         self.action_msg.setStyleSheet("color: #888;" if result.ok else "color: #e74c3c;")
         self.action_msg.setText("\n".join(result.lines))
 
     def init_ram_controls(self):
-        import psutil
-
-        total_gb = max(1, int(psutil.virtual_memory().total / (1024**3)))
+        total_gb = config.total_ram_gb()
         recommended_gb = config.suggest_memory_mb() // 1024
         self.ram_detected_label.setText(
             f"Detected {total_gb} GB of system RAM - minimum {config.MIN_MEMORY_GB} GB, "
@@ -715,9 +587,7 @@ class StatusPage(QWidget):
         return " Takes effect next time you start the server."
 
     def on_save_ram(self):
-        import psutil
-
-        total_gb = max(1, int(psutil.virtual_memory().total / (1024**3)))
+        total_gb = config.total_ram_gb()
         is_auto = self.ram_auto_check.isChecked()
         chosen_gb = self.ram_spin.value()
 
@@ -725,14 +595,9 @@ class StatusPage(QWidget):
         cfg["memory_auto"] = is_auto
         cfg["memory_mb"] = chosen_gb * 1024
         config.save(cfg)
-        # exists(), not just "a world name is set" - config.server_dir() only joins
-        # the name onto servers/ without checking anything is there. If the folder
-        # has gone (deleted by hand to free space, say), write_world_meta raised
-        # FileNotFoundError out of this slot AFTER config.save had already written:
-        # Qt swallowed it, so the setting was saved but the "Saved." message below
-        # never ran and the button looked like it did nothing. The saved config is
-        # what actually drives the next start, so skipping the per-world snapshot
-        # here is the right outcome, not an error worth bothering the user with.
+        # exists(), not just a world name: server_dir() doesn't check the folder is
+        # there, and a missing one made write_world_meta raise after the config was
+        # already saved.
         server_dir = config.server_dir(cfg)
         if server_dir and server_dir.exists():
             setup_flow.write_world_meta(server_dir, cfg)
@@ -752,9 +617,7 @@ class StatusPage(QWidget):
             self.ram_msg.setText("Saved." + self._restart_hint())
 
     def init_perf_controls(self):
-        import psutil
-
-        cores = psutil.cpu_count(logical=True) or 4
+        cores = os.cpu_count() or 4
         self.perf_detected_label.setText(
             f"Detected {cores} CPU core(s) - recommended view distance "
             f"{config.suggest_view_distance()}, simulation distance {config.suggest_simulation_distance()}."
@@ -806,19 +669,15 @@ class SetupPage(QWidget):
     done = Signal()
     cancelled = Signal()
 
-    # Shared across every SetupPage visit within one app run - the version list
-    # doesn't change while the app is open, so there's no reason to re-fetch it each
-    # time the wizard is opened/closed.
+    # Shared across wizard visits - the list doesn't change while the app runs.
     _version_list_cache = None
 
     def __init__(self):
         super().__init__()
         self._worker = None
-        # Workers from abandoned runs that were still going when the wizard was
-        # re-entered. They're parked here rather than dropped so they stay both
-        # referenced (destroying a QThread while its thread runs is its own crash
-        # risk) and visible to MainWindow._pending_workers, which is what
-        # stops the app quitting mid-copy. See reset().
+        # Workers from abandoned runs still going when the wizard was re-entered - kept
+        # referenced (destroying a running QThread crashes) and visible to
+        # MainWindow._pending_workers, so quitting waits for them. See reset().
         self._stale_workers = []
         self.instance_dir = None
         self.world_name = None
@@ -833,22 +692,16 @@ class SetupPage(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(16, 16, 16, 16)
         layout.setSpacing(14)
-        title = QLabel("Set Up a Server")
-        title.setStyleSheet("font-weight: bold; font-size: 16px;")
+        title = _label("Set Up a Server", style="font-weight: bold; font-size: 16px;")
         layout.addWidget(title)
 
-        # Step 1 - all three ways to get a server going (pick an existing world,
-        # generate a new one, or switch to one already fully set up) are one
-        # choice on one page, not two disjoint flows - "Switch" used to be its
-        # own separate box below this one, which was exactly backwards from how
-        # someone actually thinks about it ("what am I doing?" is one decision,
-        # not a decision plus a separate afterthought underneath).
+        # Step 1 - pick an existing world, generate a new one, or switch to one already
+        # set up: one choice.
         self.step1_box = QGroupBox("1. Get Started")
         step1_layout = QVBoxLayout(self.step1_box)
         step1_layout.setSpacing(10)
 
-        mode_label = QLabel("What do you want to do?")
-        mode_label.setStyleSheet("color: #888;")
+        mode_label = _label("What do you want to do?", style=MUTED)
         step1_layout.addWidget(mode_label)
         mode_col = QVBoxLayout()
         mode_col.setSpacing(4)
@@ -867,20 +720,16 @@ class SetupPage(QWidget):
         mode_col.addWidget(self.mode_switch_radio)
         step1_layout.addLayout(mode_col)
 
-        # Existing/New World both need an instance to read from; Switch needs
-        # neither (the world's already fully set up the first time around) - so
-        # this block and the one below it swap places depending on the mode,
-        # instead of the switch fields living in a whole separate box.
+        # Existing and new worlds need an instance; switching doesn't - so the fields
+        # swap by mode.
         self.instance_fields_box = QWidget()
         instance_fields_layout = QVBoxLayout(self.instance_fields_box)
         instance_fields_layout.setContentsMargins(0, 0, 0, 0)
         self.detected_instances_box = QWidget()
         detected_layout = QVBoxLayout(self.detected_instances_box)
         detected_layout.setContentsMargins(0, 0, 0, 0)
-        # Both this and the folder label below are re-worded per mode in
-        # on_step1_mode_changed - the instance is used for two quite different
-        # jobs depending on the mode (where the save lives vs. which version and
-        # loader to build), and a single wording can only describe one of them.
+        # Reworded per mode in on_step1_mode_changed, since the instance is used
+        # differently in each.
         self.detected_instances_label = QLabel("Detected Minecraft instances")
         detected_layout.addWidget(self.detected_instances_label)
         self.detected_instances_combo = QComboBox()
@@ -906,22 +755,17 @@ class SetupPage(QWidget):
         switch_fields_layout.addWidget(QLabel("Server to switch to"))
         self.switch_world_combo = QComboBox()
         switch_fields_layout.addWidget(self.switch_world_combo)
-        self.switch_world_msg = QLabel("Switches immediately - no download or setup needed.")
-        self.switch_world_msg.setWordWrap(True)
-        self.switch_world_msg.setStyleSheet("color: #888;")
+        self.switch_world_msg = _label("Switches immediately - no download or setup needed.", style=MUTED, wrap=True)
         switch_fields_layout.addWidget(self.switch_world_msg)
         step1_layout.addWidget(self.switch_fields_box)
         self.switch_fields_box.setVisible(False)
 
-        # One button for all three modes - it relabels itself (Find Worlds /
-        # Continue / Switch) rather than being a fourth separate control, since
-        # there's only ever one meaningful next action for whichever mode is
-        # currently selected.
+        # One button for all three modes, relabelled to match (Find Worlds / Continue /
+        # Switch).
         self.find_or_continue_btn = QPushButton("Find Worlds")
         self.find_or_continue_btn.clicked.connect(self.on_proceed_from_step1)
         step1_layout.addWidget(self.find_or_continue_btn)
-        self.step1_msg = QLabel("")
-        self.step1_msg.setWordWrap(True)
+        self.step1_msg = _label(wrap=True)
         step1_layout.addWidget(self.step1_msg)
 
         layout.addWidget(self.step1_box)
@@ -946,32 +790,26 @@ class SetupPage(QWidget):
         new_layout.addWidget(QLabel("New world name"))
         self.new_world_name_edit = QLineEdit()
         new_layout.addWidget(self.new_world_name_edit)
-        # Word-wrapped, like every other long label here. Without it this one line
-        # of text reported a ~526px minimum width, which QMainWindow enforces as
-        # the window's own minimum - so reaching this step yanked the whole window
-        # 100px wider and (since Qt never shrinks a window back) left it that way
-        # for the rest of the session, including back on the status page.
-        owner_username_label = QLabel(
-            "Your Minecraft username (required - the whitelist means nobody, including you, "
-            "can join without it)"
+        # Wrapped, or its ~526px width becomes the window's minimum for good.
+        new_layout.addWidget(
+            _label(
+                "Your Minecraft username (required - the whitelist means nobody, including you, "
+                "can join without it)",
+                wrap=True,
+            )
         )
-        owner_username_label.setWordWrap(True)
-        new_layout.addWidget(owner_username_label)
         self.owner_username_edit = QLineEdit()
         new_layout.addWidget(self.owner_username_edit)
 
-        # World generation options - only meaningful the first time a world is ever
-        # created (an already-generated existing world's terrain/seed can't
-        # retroactively change), so these live only in this box, not the
-        # existing-world path.
+        # World generation options - only for a brand-new world.
         mode_diff_row = QHBoxLayout()
         mode_diff_row.addWidget(QLabel("Game mode"))
         self.gamemode_combo = QComboBox()
-        self.gamemode_combo.addItems(["Survival", "Creative", "Adventure", "Spectator"])
+        self.gamemode_combo.addItems([g.capitalize() for g in setup_flow.GAMEMODES])
         mode_diff_row.addWidget(self.gamemode_combo, 1)
         mode_diff_row.addWidget(QLabel("Difficulty"))
         self.difficulty_combo = QComboBox()
-        self.difficulty_combo.addItems(["Peaceful", "Easy", "Normal", "Hard"])
+        self.difficulty_combo.addItems([d.capitalize() for d in setup_flow.DIFFICULTIES])
         self.difficulty_combo.setCurrentText("Easy")
         mode_diff_row.addWidget(self.difficulty_combo, 1)
         new_layout.addLayout(mode_diff_row)
@@ -1007,20 +845,14 @@ class SetupPage(QWidget):
         self.mc_version_combo = QComboBox()
         version_loader_layout.addWidget(self.mc_version_combo)
         loader_row = QHBoxLayout()
-        self.vanilla_radio = QRadioButton("Vanilla")
-        self.fabric_radio = QRadioButton("Fabric")
-        self.forge_radio = QRadioButton("Forge")
-        self.neoforge_radio = QRadioButton("NeoForge")
-        loader_row.addWidget(self.vanilla_radio)
-        loader_row.addWidget(self.fabric_radio)
-        loader_row.addWidget(self.forge_radio)
-        loader_row.addWidget(self.neoforge_radio)
+        self.loader_radios = {}
+        for loader in world.SUPPORTED_LOADERS:
+            self.loader_radios[loader] = QRadioButton("NeoForge" if loader == "neoforge" else loader.capitalize())
+            loader_row.addWidget(self.loader_radios[loader])
         version_loader_layout.addLayout(loader_row)
         step2_layout.addWidget(self.version_loader_box)
 
-        self.loader_warning = QLabel("")
-        self.loader_warning.setWordWrap(True)
-        self.loader_warning.setStyleSheet("color: #b45309;")
+        self.loader_warning = _label(style=WARN, wrap=True)
         step2_layout.addWidget(self.loader_warning)
         self.continue_btn = QPushButton("Continue")
         self.continue_btn.clicked.connect(self.on_prepare_world)
@@ -1059,19 +891,8 @@ class SetupPage(QWidget):
         layout.addWidget(cancel_btn)
         layout.addStretch()
 
-    def _resize_window_to_fit(self):
-        # Each step shows/hides a different set of boxes, so the window's ideal
-        # height changes as the wizard progresses - MainWindow.fit_to_current_page
-        # re-measures whichever page is current, but that only runs when the
-        # stack itself switches pages, not on these in-page step transitions, so
-        # it has to be poked here too. Guarded since this page can also be driven
-        # standalone (outside a real MainWindow) during testing.
-        window = self.window()
-        if hasattr(window, "fit_to_current_page"):
-            window.fit_to_current_page()
-
     def reset(self):
-        instances = setup_flow.find_instances()
+        instances = world.find_instances()
         self.detected_instances_combo.blockSignals(True)
         self.detected_instances_combo.clear()
         for instance in instances:
@@ -1079,11 +900,9 @@ class SetupPage(QWidget):
         self.detected_instances_combo.blockSignals(False)
         self.detected_instances_box.setVisible(bool(instances))
 
-        # Prefill from the first detected instance if there is one - still just a
-        # starting point, the field underneath stays a plain editable text box for
-        # anything not auto-detected (a different account, an instance outside the
-        # launchers this looks for, etc).
-        prefill = instances[0]["path"] if instances else setup_flow.default_instance_dir()
+        # Prefill from the first detected instance; the field stays editable for
+        # anything not detected.
+        prefill = instances[0]["path"] if instances else str(world.default_instance_dir() or "")
         self.instance_dir_edit.setText(prefill)
         self.step1_msg.setText("")
         self.new_world_name_edit.setText("")
@@ -1095,31 +914,24 @@ class SetupPage(QWidget):
         self.spawn_protection_spin.setValue(16)
         self.seed_edit.setText("")
 
-        # "Switch to a Previously Set-Up Server" doesn't need an instance dir at
-        # all - it's ready the moment the wizard opens rather than waiting on
-        # Find Worlds - but the option itself only makes sense, and only shows
-        # up, when there's actually something to switch to.
+        # Switching needs no instance, and the option only shows when there's something
+        # to switch to.
         known_servers = self._populate_switch_world_combo()
         self.mode_switch_radio.setVisible(bool(known_servers))
 
         self.mode_existing_radio.setChecked(True)
         self.on_step1_mode_changed()
 
-        # Cleared explicitly, because this page is one long-lived instance rather
-        # than a fresh widget per run (see tray_app.py) - anything left here carries
-        # into the next setup. An owner resolved for a world the user then backed
-        # out of would otherwise still be sitting here, ready to be written into a
-        # different world's whitelist.json/ops.json.
+        # Cleared explicitly: this page is one long-lived instance, and an owner left
+        # from an abandoned run could otherwise be written into another world's
+        # whitelist/ops.
         self.world_name = None
         self.owner_uuid = None
         self.owner_name = None
         self.is_new_world = False
-        # Parked, not dropped. _worker being reassigned is what makes
-        # _on_prepare_done ignore an abandoned run's late result, but simply
-        # setting it to None would have thrown away the last reference to a
-        # QThread that may still be copying a world - hiding it from
-        # MainWindow._pending_workers (so quitting no longer waits for it, leaving a
-        # half-copied world behind) and risking it being finalized mid-run.
+        # Parked, not dropped: reassigning _worker makes _on_prepare_done ignore the
+        # abandoned run, but it may still be copying a world, so keep it referenced and
+        # visible to MainWindow._pending_workers.
         if self._worker is not None and self._worker.isRunning():
             self._stale_workers.append(self._worker)
         # Anything already finished can be forgotten, so this doesn't grow forever.
@@ -1134,7 +946,7 @@ class SetupPage(QWidget):
         self.step2_box.setVisible(False)
         self.step3_box.setVisible(False)
         self.step4_box.setVisible(False)
-        self._resize_window_to_fit()
+        _fit_window(self)
 
     def on_detected_instance_selected(self, index):
         path = self.detected_instances_combo.itemData(index)
@@ -1148,15 +960,11 @@ class SetupPage(QWidget):
             self.instance_dir_edit.setText(chosen)
 
     def on_step1_mode_changed(self):
-        """Relabels step 1's single action button and swaps its input fields to
-        match whichever of the three modes is picked - none of the actual work
-        (listing worlds, detecting loader info, switching) happens until it's
-        actually clicked, in on_proceed_from_step1."""
+        """Relabels step 1's button and swaps its fields for the selected mode - the
+        work happens on click, in on_proceed_from_step1."""
         is_switch = self.mode_switch_radio.isChecked()
         is_new = self.mode_new_radio.isChecked()
-        # Shown only when there's an existing save to go and find. A brand-new
-        # world doesn't come from an instance at all (see on_proceed_from_step1),
-        # and switching to an already-set-up world doesn't need one either.
+        # Only an existing save needs an instance.
         self.instance_fields_box.setVisible(not is_switch and not is_new)
         self.switch_fields_box.setVisible(is_switch)
         if is_switch:
@@ -1172,20 +980,15 @@ class SetupPage(QWidget):
             return
 
         if self.mode_new_radio.isChecked():
-            # A brand-new world has no relationship to any Minecraft instance at
-            # all, so there's nothing to ask for here: prepare_new_world ignores
-            # instance_dir, mods deliberately aren't copied into a new world
-            # (copy_mods=False), and the version and mod loader are both chosen
-            # outright on the very next screen. The instance could only ever have
-            # pre-ticked those two controls, which is no saving once they're
-            # sitting right there - so the fields aren't shown for this mode and
-            # nothing is read from them.
+            # A brand-new world has nothing to do with an instance: prepare_new_world
+            # ignores it, mods aren't copied, and version and loader are chosen on the
+            # next screen.
             self.instance_dir = ""
             self.step1_msg.setText("")
             self.on_mode_changed()
             self.step1_box.setVisible(False)
             self.step2_box.setVisible(True)
-            self._resize_window_to_fit()
+            _fit_window(self)
             return
 
         instance_dir = self.instance_dir_edit.text()
@@ -1208,7 +1011,7 @@ class SetupPage(QWidget):
         self.on_mode_changed()
         self.step1_box.setVisible(False)
         self.step2_box.setVisible(True)
-        self._resize_window_to_fit()
+        _fit_window(self)
 
     def on_mode_changed(self):
         is_existing = self.mode_existing_radio.isChecked()
@@ -1220,18 +1023,10 @@ class SetupPage(QWidget):
         if is_existing:
             self.on_world_selected(self.world_combo.currentText())
         elif is_new:
-            # _select_version is what populates the version dropdown (and kicks off
-            # the one-time fetch of Mojang's manifest), so this has to run
-            # unconditionally for a new world. It used to be guarded on having an
-            # instance to detect from, which left the dropdown completely EMPTY for
-            # anyone generating a world without one - and then Continue reported
-            # "Still loading the version list" forever, because nothing was ever
-            # loading. Passing None just means "no particular version preselected",
-            # which leaves the newest release selected (the list is newest-first) -
-            # a better default for a brand-new world than matching some old
-            # instance anyway.
+            # _select_version populates the dropdown, so it must run for a new world;
+            # None leaves the newest release selected.
             self._select_version(None)
-            self.vanilla_radio.setChecked(True)
+            self.loader_radios["vanilla"].setChecked(True)
             self.loader_warning.setText("")
 
     def _populate_switch_world_combo(self):
@@ -1251,22 +1046,16 @@ class SetupPage(QWidget):
     def _apply_detected_loader(self, info):
         suggested = info["suggested_loader"]
         self._select_version(info["mc_version"])
-        self.vanilla_radio.setChecked(suggested == "vanilla")
-        self.fabric_radio.setChecked(suggested == "fabric")
-        self.forge_radio.setChecked(suggested == "forge")
-        self.neoforge_radio.setChecked(suggested == "neoforge")
+        self.loader_radios.get(suggested, self.loader_radios["vanilla"]).setChecked(True)
         self.loader_warning.setText("")
 
     def _select_version(self, detected_version):
-        """Populates (and caches) the version dropdown from Mojang's manifest, then
-        selects detected_version in it if present. Fetching happens once per app run
-        and in the background - switching worlds/modes while it's still loading just
-        updates which version gets selected once it finishes."""
+        """Populates (and caches) the version dropdown from Mojang's manifest in the
+        background, then selects detected_version if present. Switching worlds while
+        it loads just changes which version is selected at the end."""
         self._pending_version_selection = detected_version
-        # Only a non-empty cache counts as "already fetched" - an empty list means
-        # the last attempt failed (list_release_versions() returns [] rather than
-        # raising), and should be retried rather than treated as a permanent result
-        # for the rest of the session.
+        # Only a non-empty cache counts - an empty list means the last fetch failed, so
+        # retry.
         if SetupPage._version_list_cache:
             self._populate_version_combo(SetupPage._version_list_cache)
             return
@@ -1289,9 +1078,7 @@ class SetupPage(QWidget):
         self.mc_version_combo.setEnabled(True)
         self.mc_version_combo.clear()
         if not versions:
-            # Offline / the fetch failed - fall back to whatever was already
-            # detected (if anything) so setup can still proceed without network
-            # access to Mojang's manifest, rather than leaving an empty dropdown.
+            # Offline - fall back to whatever was detected, so setup can still go ahead.
             self.mc_version_combo.addItem(self._pending_version_selection or "1.21")
             return
         self.mc_version_combo.addItems(versions)
@@ -1310,7 +1097,7 @@ class SetupPage(QWidget):
             return
         self.step1_box.setVisible(False)
         self.step4_box.setVisible(True)
-        self._resize_window_to_fit()
+        _fit_window(self)
         self.finish_msg.setText("Switching...")
         self._worker = Worker(setup_flow.switch_to_world, world_name)
         self._worker.finished_result.connect(self._on_switch_done)
@@ -1318,14 +1105,7 @@ class SetupPage(QWidget):
 
     def on_prepare_world(self):
         self.mc_version = self.mc_version_combo.currentText()
-        if self.neoforge_radio.isChecked():
-            self.loader = "neoforge"
-        elif self.forge_radio.isChecked():
-            self.loader = "forge"
-        elif self.fabric_radio.isChecked():
-            self.loader = "fabric"
-        else:
-            self.loader = "vanilla"
+        self.loader = next((name for name, radio in self.loader_radios.items() if radio.isChecked()), "vanilla")
         generate_new = self.mode_new_radio.isChecked()
         self.is_new_world = generate_new
 
@@ -1353,7 +1133,7 @@ class SetupPage(QWidget):
 
         self.step2_box.setVisible(False)
         self.step3_box.setVisible(True)
-        self._resize_window_to_fit()
+        _fit_window(self)
         self.prepare_msg.setText("Preparing...")
         self.finish_btn.setEnabled(False)
 
@@ -1365,27 +1145,18 @@ class SetupPage(QWidget):
         self._worker.start()
 
     def _on_prepare_done(self, result):
-        # SetupPage is one long-lived instance reused via reset(), and a worker from
-        # an abandoned run (cancelled mid-copy, then a different world started) still
-        # delivers its result when it eventually finishes. Without this guard, a slow
-        # earlier run landing after a later one would overwrite owner_uuid/owner_name
-        # with the wrong world's owner - whitelisting and opping the world now being
-        # set up to whoever owned the one that was abandoned.
+        # A worker from an abandoned run still delivers its result later - ignore it, or
+        # it would set the wrong world's owner (and whitelist and op them here).
         if self.sender() is not self._worker:
             return
-        if isinstance(result, WorkerError):
-            self.prepare_msg.setText(f"Failed: {result.message}")
+        if isinstance(result, Exception):
+            self.prepare_msg.setText(f"Failed: {error_text(result)}")
             self.finish_btn.setEnabled(False)
             return
         self.prepare_msg.setText("\n".join(result.lines))
-        # Enabled only when prepare actually SUCCEEDED. Checking just for WorkerError
-        # missed ordinary ok=False results - most importantly "servers\<name> already
-        # exists - pick a different world name", which is one line of text next to a
-        # live button. Clicking Finish anyway ran finish_setup against that existing
-        # server: regenerating its server.properties from the new-world options and,
-        # because a failed prepare resolves no owner, rewriting it with
-        # white-list=false - quietly turning an established, whitelisted server into
-        # a publicly joinable one (see the disclaimer prepare_world itself prints).
+        # Enabled only on success, not just "no exception": finishing after a failed
+        # prepare (say, the name already exists) would rewrite that existing server's
+        # settings with its whitelist turned off.
         if not result.ok:
             self.owner_uuid = self.owner_name = None
             self.finish_btn.setEnabled(False)
@@ -1397,8 +1168,8 @@ class SetupPage(QWidget):
     def _on_switch_done(self, result):
         if self.sender() is not self._worker:  # see _on_finish_done
             return
-        if isinstance(result, WorkerError):
-            self.finish_msg.setText(f"Failed: {result.message}")
+        if isinstance(result, Exception):
+            self.finish_msg.setText(f"Failed: {error_text(result)}")
             return
         self.finish_msg.setText("\n".join(result.lines))
 
@@ -1408,19 +1179,14 @@ class SetupPage(QWidget):
 
         world_options = None
         if self.is_new_world:
-            world_options = {
-                "gamemode": self.gamemode_combo.currentText().lower(),
-                "difficulty": self.difficulty_combo.currentText().lower(),
-                "level-type": self.level_type_combo.currentData(),
-                "generate-structures": "true" if self.generate_structures_check.isChecked() else "false",
-                "spawn-protection": str(self.spawn_protection_spin.value()),
-            }
-            # A raw newline in the seed would inject an extra line into
-            # server.properties, same class of issue valid_new_world_name already
-            # guards against for the world name - strip it down to one line.
-            seed = self.seed_edit.text().strip().splitlines()
-            if seed and seed[0]:
-                world_options["level-seed"] = seed[0]
+            world_options = setup_flow.world_options(
+                self.gamemode_combo.currentText().lower(),
+                self.difficulty_combo.currentText().lower(),
+                self.level_type_combo.currentData(),
+                self.generate_structures_check.isChecked(),
+                self.spawn_protection_spin.value(),
+                self.seed_edit.text(),
+            )
 
         self._worker = Worker(
             setup_flow.finish_setup,
@@ -1437,23 +1203,18 @@ class SetupPage(QWidget):
         self._worker.start()
 
     def _on_finish_done(self, result):
-        # Same staleness guard as _on_prepare_done, and it matters more here:
-        # finish_setup is the longest step (Java plus a server-jar download, minutes
-        # on a slow connection) and Cancel stays available throughout. Without
-        # this, cancelling world A's finish and starting the wizard again for world
-        # B would have A's worker eventually report into B's wizard - hiding step 3,
-        # showing "4. Done" with A's success text, and leaving the user believing B
-        # was set up while config.json actually points at A.
+        # Same staleness guard as _on_prepare_done: an abandoned finish reporting into a
+        # newer run would show another world's result as this one's.
         if self.sender() is not self._worker:
             return
         self.finish_btn.setEnabled(True)
         self.finish_btn.setText("Finish Setup")
-        if isinstance(result, WorkerError):
-            self.prepare_msg.setText(f"Setup failed: {result.message}")
+        if isinstance(result, Exception):
+            self.prepare_msg.setText(f"Setup failed: {error_text(result)}")
             return
         self.finish_msg.setText("\n".join(result.lines))
         self.step3_box.setVisible(False)
         self.step4_box.setVisible(True)
-        self._resize_window_to_fit()
+        _fit_window(self)
 
 

@@ -8,49 +8,22 @@ from pathlib import Path
 
 import psutil
 
-# CREATE_NO_WINDOW, not DETACHED_PROCESS: java.exe (and python.exe, for the tunnel
-# client) are console-subsystem executables. DETACHED_PROCESS gives them *no* console
-# at all rather than a genuinely suppressed one, and a console-subsystem program
-# started that way can end up allocating its own new, visible console as a fallback -
-# exactly the "a cmd window popped up on screen" report this was chasing, and a
-# real risk once it happens: a classic console left visible with QuickEdit mode on
-# freezes the whole process the instant someone clicks into it to select text (it
-# blocks on the next console write until the selection is cancelled), which is
-# consistent with a real server.out.log showing a 42-second tick freeze and a stray
-# keystroke right as every player got disconnected. CREATE_NO_WINDOW is the flag
-# actually documented for "run a console app with no window at all" and was already
-# confirmed to fix the equivalent problem for the self-updater's PowerShell child
-# (see update_checker.py). CREATE_BREAKAWAY_FROM_JOB is kept for the same reason as
-# there too: these processes are meant to outlive the GUI/tray process unconditionally.
+# CREATE_NO_WINDOW, not DETACHED_PROCESS: a console program started with no console at
+# all can allocate its own visible one, and a visible console in QuickEdit mode freezes
+# the server when clicked. CREATE_BREAKAWAY_FROM_JOB lets these outlive the GUI.
 DETACHED_FLAGS = (
     subprocess.CREATE_NEW_PROCESS_GROUP
     | subprocess.CREATE_NO_WINDOW
     | subprocess.CREATE_BREAKAWAY_FROM_JOB
 )
 
-# Java's NIO on Windows opens an AF_UNIX loopback socket internally, whose path length
-# is capped (~108 bytes). A long user profile path (e.g. C:\Users\<long-name>\AppData\
-# Local\Temp\...) can push the generated socket path over that limit and crash the JVM
-# with "Unable to establish loopback connection" / "Invalid argument: connect". Giving
-# Java processes a short TEMP/TMP avoids it; harmless for non-Java processes too.
+# Java's NIO opens an AF_UNIX socket under TEMP, and a long profile path overflows its
+# ~108-byte limit ("Unable to establish loopback connection"). A short TEMP avoids it.
 SHORT_TMP_DIR = Path("C:/mctmp")
 
-# launch_detached() only ever returns proc.pid, so without this the Popen object
-# itself would immediately drop to zero references the instant the function
-# returns - garbage collecting it right there, on whatever thread happened to
-# call this (a background Worker thread, for Start/Stop actions). A Popen that's
-# never had .wait() called on it still holds a live Windows process handle, and
-# its __del__ finalizer running on a background thread while the interpreter
-# starts shutting down (confirmed by direct reproduction: quitting shortly after
-# Stop reliably crashed the process on exit with a native access violation, even
-# after explicitly waiting for the action's QThread to finish first - the crash
-# went away entirely once this stopped happening) is a well-known unsafe
-# combination. These processes are meant to run detached and outlive us anyway
-# (CREATE_BREAKAWAY_FROM_JOB), so keeping every Popen referenced for the rest of
-# this process's own lifetime - never calling .wait() on it, deliberately -
-# means its finalizer simply never runs here at all; the handle it holds gets
-# reclaimed by Windows like any other of our handles when we ourselves exit,
-# same as it would if we'd never wrapped the child in a Popen object at all.
+# Every Popen stays referenced for our whole lifetime: one garbage-collected (and
+# finalized) on a worker thread during shutdown crashed the process with an access
+# violation.
 _detached_procs = []
 
 
@@ -76,54 +49,34 @@ def launch_detached(cmd, cwd, log_path, short_tmp=False):
         close_fds=True,
         env=env,
     )
-    # The child gets its own duplicated handle to the file at Popen() time - our
-    # copy isn't needed for the child to keep writing to it, and leaving it open
-    # just means Python closes it whenever this now out-of-scope file object
-    # happens to get garbage collected, same uncontrolled timing risk as proc
-    # above. Closing it here, deterministically, avoids that entirely.
+    # The child has its own handle - close ours now, not whenever GC gets to it.
     log_file.close()
     _detached_procs.append(proc)
     return proc.pid
 
 
-# Pid files outlive the processes they name - most commonly across a PC restart,
-# after which Windows hands low PIDs out again quickly. A bare PID then matches some
-# unrelated program, which made status say "Running", made Start refuse ("already
-# running" - so the tunnel never connected and no address was ever assigned), and
-# made Stop terminate() that unrelated program. So the file records the process's
-# start time too, and read_pid only returns a PID that is still that same process.
+# Pid files outlive their processes and PIDs get reused (after a restart, especially),
+# so each file records the start time too, and read_pid only returns a PID that's still
+# that same process.
 _CREATE_TIME_TOLERANCE = 1.0
-
-# Legacy pid files (PID only, written before start times were recorded) can't be
-# verified that way. Accept them only when the process is plausibly ours, so an
-# update doesn't lose track of a server that's genuinely still running.
-_OUR_PROCESS_NAMES = {"java.exe", "javaw.exe", "python.exe", "pythonw.exe", "mcpersist.exe"}
 
 
 def write_pid(pid_path, pid):
     try:
         created = psutil.Process(pid).create_time()
-        text = f"{pid} {created}"
     except psutil.Error:
-        text = str(pid)
-    Path(pid_path).write_text(text, encoding="utf-8")
+        return  # already exited - nothing to track
+    Path(pid_path).write_text(f"{pid} {created}", encoding="utf-8")
 
 
 def read_pid(pid_path):
-    p = Path(pid_path)
-    if not p.exists():
+    try:
+        pid_text, created_text = Path(pid_path).read_text(encoding="utf-8").split()
+        pid, recorded = int(pid_text), float(created_text)
+    except (ValueError, OSError):
         return None
     try:
-        parts = p.read_text(encoding="utf-8").split()
-        pid = int(parts[0])
-        recorded = float(parts[1]) if len(parts) > 1 else None
-    except (ValueError, IndexError, OSError):
-        return None
-    try:
-        proc = psutil.Process(pid)
-        if recorded is not None:
-            return pid if abs(proc.create_time() - recorded) <= _CREATE_TIME_TOLERANCE else None
-        return pid if proc.name().lower() in _OUR_PROCESS_NAMES else None
+        return pid if abs(psutil.Process(pid).create_time() - recorded) <= _CREATE_TIME_TOLERANCE else None
     except psutil.Error:
         # Gone (or not inspectable): not running, which callers treat the same as
         # no pid file at all.
@@ -134,7 +87,7 @@ def is_running(pid):
     if pid is None:
         return False
     try:
-        return psutil.pid_exists(pid) and psutil.Process(pid).status() != psutil.STATUS_ZOMBIE
+        return psutil.Process(pid).status() != psutil.STATUS_ZOMBIE
     except psutil.Error:
         return False
 

@@ -6,19 +6,25 @@ import shutil
 import subprocess
 
 
-def find_java(java_path="java"):
-    return shutil.which(java_path)
+def parse_major(version_string):
+    """The Java major version from a version string. The legacy form puts it second
+    ("1.8.0_312" is Java 8); modern ones lead with it ("25.0.1")."""
+    match = re.search(r"(\d+)(?:\.(\d+))?", version_string)
+    if not match:
+        return None
+    major = int(match.group(1))
+    if major == 1 and match.group(2):
+        return int(match.group(2))
+    return major
 
 
 def detected_major_version(java_path="java"):
-    exe = find_java(java_path)
+    exe = shutil.which(java_path)
     if not exe:
         return None
     try:
-        # CREATE_NO_WINDOW like every other console child this app launches: from the
-        # windowed GUI (no console of its own), java.exe otherwise gets a visible
-        # console window of its own - verified, not assumed. Reached during normal
-        # auto-Java setup whenever a system Java is on PATH.
+        # CREATE_NO_WINDOW: from the windowed GUI, java.exe would otherwise open a
+        # visible console.
         result = subprocess.run(
             [exe, "-version"],
             capture_output=True,
@@ -28,11 +34,5 @@ def detected_major_version(java_path="java"):
         )
     except Exception:
         return None
-    output = result.stdout + result.stderr
-    match = re.search(r'version "(\d+)(?:\.(\d+))?', output)
-    if not match:
-        return None
-    major = int(match.group(1))
-    if major == 1 and match.group(2):
-        return int(match.group(2))
-    return major
+    match = re.search(r'version "([^"]+)"', result.stdout + result.stderr)
+    return parse_major(match.group(1)) if match else None

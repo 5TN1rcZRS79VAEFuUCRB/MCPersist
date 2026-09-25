@@ -2,12 +2,13 @@
 so neither duplicates it."""
 
 import json
-import os
 import re
+import shutil
+import sys
 import time
 from dataclasses import dataclass, field
 
-from . import config, java_manager, javacheck, mojang, process_manager, rcon, server_forge, server_neoforge, server_vanilla, tunnel_relay, world
+from . import config, java_manager, javacheck, mojang, process_manager, rcon, server_forge, server_neoforge
 
 
 @dataclass
@@ -25,31 +26,15 @@ def start_server(cfg, server_dir):
     if process_manager.is_running(process_manager.read_pid(server_pid_path)):
         return ActionResult(True, ["Server already running."])
 
-    # required_java_major is resolved (from Mojang's manifest, authoritative) and
-    # persisted at setup time. For a config from before that existed, try the same
-    # live lookup here (and cache it) rather than falling straight to world.py's
-    # hardcoded table, which goes stale every time a new Minecraft version bumps its
-    # Java requirement - falling back to it is a last resort, not the first guess.
-    required = cfg.get("required_java_major")
-    if required is None:
-        required = server_vanilla.required_java_major(cfg["mc_version"]) or world.required_java_major(
-            cfg["mc_version"], instance_dir=cfg.get("instance_dir")
-        )
-        cfg["required_java_major"] = required
-        config.save(cfg)
-    # java_auto (default True, same pattern as memory_auto): re-resolves a matching
-    # Java every start rather than trusting a path persisted from a past run, so a
-    # correction here (or in the required-version lookup) actually takes effect
-    # instead of being stuck on whatever was auto-downloaded once. Only a deliberate
-    # "java_auto": false override skips this and trusts "java_path" exactly as set.
+    required = cfg["required_java_major"]  # resolved and saved at setup time
+    # java_auto (the default) re-resolves a matching Java every start instead of
+    # trusting a path from a past run; "java_auto": false trusts java_path as set.
     if not cfg.get("java_auto", True):
-        java_path = javacheck.find_java(cfg["java_path"])
+        java_path = shutil.which(cfg["java_path"])
         if not java_path:
             return ActionResult(False, [f'"java_path" in config.json ({cfg["java_path"]!r}) was not found.'])
-        # Checked here, not just at setup time: an outdated/wrong Java launches fine
-        # (find_java only checks it exists) but crashes the server instantly with a
-        # cryptic UnsupportedClassVersionError - catching the mismatch before
-        # launching gives a clear message instead of a doomed process.
+        # A wrong Java launches fine, then dies with a cryptic
+        # UnsupportedClassVersionError - say so up front instead.
         detected = javacheck.detected_major_version(cfg["java_path"])
         if detected is not None and detected != required:
             return ActionResult(
@@ -74,11 +59,8 @@ def start_server(cfg, server_dir):
                 ],
             )
 
-    # Forge (1.17+) doesn't produce a directly runnable server.jar the way vanilla/
-    # Fabric do - it's launched via an @args-file under libraries/ instead (see
-    # server_forge.find_launch_args_file). Everything else about starting it is
-    # identical, so this is the only real branch point.
-    # NeoForge launches the same way, from its own args file location.
+    # Forge and NeoForge (1.17+) launch via an @args-file under libraries/ rather than
+    # server.jar; that's the only real difference.
     args_finder = {
         "forge": server_forge.find_launch_args_file,
         "neoforge": server_neoforge.find_launch_args_file,
@@ -88,10 +70,8 @@ def start_server(cfg, server_dir):
     if forge_args_file is None and not jar_path.exists():
         return ActionResult(False, [f"Missing {jar_path} - run `run.bat setup` again."])
 
-    # Re-applied fresh before every start, same reasoning as the memory sizing below -
-    # stays current if performance_auto is on and the hardware or config changes,
-    # without touching anything else in the file (the whitelist toggle, in particular,
-    # can change independently via RCON/in-game).
+    # Re-applied before every start so auto-sized settings stay current, without
+    # touching anything else in the file.
     from . import setup_flow
 
     setup_flow.update_server_properties(
@@ -104,20 +84,10 @@ def start_server(cfg, server_dir):
 
     memory_mb = config.ensure_memory_mb(cfg)
     if forge_args_file is not None:
-        # Matches Forge's own generated run.bat exactly (java @user_jvm_args.txt
-        # @libraries/.../win_args.txt nogui), not a reconstruction from first
-        # principles - confirmed by direct reproduction that deviating from it
-        # breaks the launch: an *absolute* path for the args file (instead of
-        # relative to server_dir, which this always runs with as cwd) made
-        # ModLauncher fail applying its access transformers to core Minecraft
-        # server classes before the server ever really started. user_jvm_args.txt
-        # is real Forge output too (normally just commented-out placeholders for
-        # -Xmx/-Xms) - referencing it costs nothing and matches what Forge itself
-        # expects to be read alongside win_args.txt. Our own -Xmx/-Xms still have
-        # to come *before* either @file, since win_args.txt's own content ends in
-        # "-jar <shim>" - once a "-jar" appears, java treats everything after it
-        # as program arguments, not JVM flags, so anything meant as a JVM flag
-        # (ours included) has to be placed earlier than that.
+        # Matches Forge's own run.bat: the args file relative to cwd (an absolute path
+        # breaks ModLauncher), user_jvm_args.txt alongside, and our -Xmx/-Xms before
+        # either @file, since win_args.txt ends in "-jar <shim>" and java treats
+        # everything after -jar as program arguments.
         args_file_rel = forge_args_file.relative_to(server_dir)
         cmd = [java_path, f"-Xmx{memory_mb}M", f"-Xms{memory_mb}M"]
         if (server_dir / "user_jvm_args.txt").exists():
@@ -126,23 +96,15 @@ def start_server(cfg, server_dir):
     else:
         cmd = [java_path, f"-Xmx{memory_mb}M", f"-Xms{memory_mb}M", "-jar", str(jar_path), "nogui"]
     log_path = server_dir / "logs" / "server.out.log"
-    # launch_detached appends to this log, so an earlier run's "Done" is already in
-    # it - matching against the whole file broke out of the wait below on its first
-    # iteration, reporting a server that crashes seconds later as started. Only
-    # what this launch writes counts.
+    # The log is appended to, so only what this launch writes counts - an earlier run's
+    # "Done" would report a crashing server as started.
     log_start = log_path.stat().st_size if log_path.exists() else 0
     pid = process_manager.launch_detached(cmd, cwd=server_dir, log_path=log_path, short_tmp=True)
     process_manager.write_pid(server_pid_path, pid)
 
-    # launch_detached() only confirms the OS accepted the launch, not that the server
-    # actually came up - a world directory already locked by another still-running
-    # server process (see stop_server's pid-file fix above for how that could happen),
-    # a corrupt jar, or any other fast-crash cause all look identical to success
-    # without this check. Polling rather than one fixed sleep: a real doomed launch
-    # (e.g. the world-lock case) only fails *after* the JVM boots and 50+ mods load -
-    # confirmed by reproduction to take 7-13s, not the couple seconds a single sleep
-    # would catch - but exits as soon as the log reports "Done" too, so a normal
-    # successful start isn't stuck waiting out the full window on the common path.
+    # launch_detached only means the OS accepted the launch. Poll for a quick exit (a
+    # locked world, a bad jar - with many mods that takes 7-13s), stopping early once
+    # the log says "Done".
     def new_log_text():
         try:
             with open(log_path, "rb") as f:
@@ -178,72 +140,63 @@ def start_tunnel(cfg, server_dir):
     if not cfg.get("relay_host"):
         return ActionResult(False, ['No relay configured - check "relay_host" in config.json.'])
 
-    pid, log_path = tunnel_relay.launch(server_dir)
+    log_path = server_dir / "logs" / "tunnel.out.log"
+    if getattr(sys, "frozen", False):
+        # sys.executable is MCPersist.exe itself here - "-m" would relaunch the GUI,
+        # so pass the sentinel flag main_gui.py checks for instead.
+        cmd = [sys.executable, "--tunnel-relay-run"]
+    else:
+        cmd = [sys.executable, "-m", "mcpersist.tunnel_relay_run"]
+    pid = process_manager.launch_detached(cmd, cwd=server_dir, log_path=log_path)
     process_manager.write_pid(tunnel_pid_path, pid)
     return ActionResult(True, [f"Tunnel started (pid {pid}). Logs: {log_path}"])
 
 
-def stop_server(cfg, server_dir):
-    server_pid_path = server_dir / "server.pid"
-    server_pid = process_manager.read_pid(server_pid_path)
+def _stop(pid_path, label, stopper):
+    """Stops the process in pid_path, forgetting the pid only once it's really gone:
+    a process still running untracked would hold the world lock, and the next Start
+    would launch a second one against it."""
+    pid = process_manager.read_pid(pid_path)
     lines = []
-    if process_manager.is_running(server_pid):
-        lines.append("Stopping Minecraft server (RCON stop) ...")
-        process_manager.stop_server_gracefully("127.0.0.1", cfg["rcon_port"], cfg["rcon_password"], server_pid)
-        # Only forget the pid if the process is actually gone - deleting it
-        # unconditionally (the previous behavior) meant a stop that failed to
-        # actually kill the process (RCON unreachable, or it just took longer than
-        # the graceful/kill timeouts) left the app believing "stopped" while a real
-        # server was still running and still holding the world's directory lock.
-        # The next Start then launched a second java.exe against the same world,
-        # which correctly refused to run (Minecraft's own lock, not a new bug there)
-        # while the original, now-untracked process kept running indefinitely -
-        # exactly "says stopped but still running, still connectable" in practice.
-        if process_manager.is_running(server_pid):
+    if process_manager.is_running(pid):
+        lines.append(f"Stopping {label} ...")
+        stopper(pid)
+        if process_manager.is_running(pid):
             lines.append(
-                f"WARNING: couldn't actually stop it (pid {server_pid} is still running) - "
-                "leaving it tracked as running rather than losing track of it. Try Stop again, "
+                f"WARNING: couldn't actually stop it (pid {pid} is still running) - try Stop again, "
                 "or end the process yourself if it's stuck."
             )
             return ActionResult(False, lines)
-    server_pid_path.unlink(missing_ok=True)
+    pid_path.unlink(missing_ok=True)
     return ActionResult(True, lines)
+
+
+def stop_server(cfg, server_dir):
+    return _stop(
+        server_dir / "server.pid",
+        "Minecraft server (RCON stop)",
+        lambda pid: process_manager.stop_server_gracefully("127.0.0.1", cfg["rcon_port"], cfg["rcon_password"], pid),
+    )
 
 
 def stop_tunnel(server_dir):
-    tunnel_pid_path = server_dir / "tunnel.pid"
-    tunnel_pid = process_manager.read_pid(tunnel_pid_path)
-    lines = []
-    if process_manager.is_running(tunnel_pid):
-        lines.append("Stopping tunnel ...")
-        process_manager.stop_pid(tunnel_pid)
-        if process_manager.is_running(tunnel_pid):
-            lines.append(f"WARNING: couldn't actually stop it (pid {tunnel_pid} is still running).")
-            return ActionResult(False, lines)
-    tunnel_pid_path.unlink(missing_ok=True)
-    return ActionResult(True, lines)
+    return _stop(server_dir / "tunnel.pid", "tunnel", process_manager.stop_pid)
 
 
 def get_whitelist_info(server_dir):
-    """Reads whitelist status straight from server.properties/whitelist.json rather
-    than tracking it separately - stays correct even if someone edits those by hand or
-    toggles it via RCON/in-game (`whitelist on`/`off`/`add`/`remove`) rather than
-    through MCPersist."""
-    enabled = None
-    props_path = server_dir / "server.properties"
-    if props_path.exists():
-        for line in props_path.read_text(encoding="utf-8", errors="replace").splitlines():
-            if line.strip().startswith("white-list="):
-                enabled = line.split("=", 1)[1].strip().lower() == "true"
-                break
+    """Read straight from server.properties/whitelist.json, so it stays correct when
+    changed by hand or in-game."""
+    from .setup_flow import read_server_properties
+
+    value = read_server_properties(server_dir).get("white-list")
+    enabled = None if value is None else value.lower() == "true"
 
     names = []
-    wl_path = server_dir / "whitelist.json"
-    if wl_path.exists():
-        try:
-            names = [e.get("name") for e in json.loads(wl_path.read_text(encoding="utf-8")) if e.get("name")]
-        except (json.JSONDecodeError, OSError):
-            names = []
+    try:
+        entries = json.loads((server_dir / "whitelist.json").read_text(encoding="utf-8-sig"))
+        names = [e["name"] for e in entries if isinstance(e, dict) and e.get("name")]
+    except (OSError, ValueError, TypeError):
+        pass
 
     return enabled, names
 
@@ -252,9 +205,9 @@ _TUNNEL_ERROR_MARKERS = ("connection error", "registration failed", "closed the 
 
 
 def tunnel_log_problem(server_dir):
-    """The tunnel's most recent line if it's a failure, so "no address yet" can say
-    why (relay unreachable, registration refused) instead of leaving the user to
-    guess - a firewall or antivirus blocking the tunnel looks identical otherwise."""
+    """The tunnel's latest log line if it's a failure, so "no address yet" can say why
+    (relay unreachable, registration refused) - a firewall blocking the tunnel looks
+    the same otherwise."""
     log_path = server_dir / "logs" / "tunnel.out.log"
     try:
         with open(log_path, "rb") as f:
@@ -287,9 +240,8 @@ def get_status(cfg, server_dir):
 
     tunnel_running = process_manager.is_running(tunnel_pid)
     return {
-        # Checked even when an address is known: assigned_address.txt persists from
-        # the last successful registration, so a tunnel that can no longer connect
-        # (e.g. firewall re-blocking a just-updated exe) would otherwise look fine.
+        # Checked even with a known address: assigned_address.txt outlives the
+        # connection, so a tunnel that can no longer connect would otherwise look fine.
         "tunnel_problem": tunnel_log_problem(server_dir) if tunnel_running else None,
         "world_name": cfg.get("world_name"),
         "loader": cfg.get("loader"),
@@ -305,10 +257,8 @@ def get_status(cfg, server_dir):
 
 
 def add_to_whitelist(cfg, server_dir, username):
-    """Adds a player to the whitelist - via RCON if the server's running (takes effect
-    immediately), or directly into whitelist.json if it's not (takes effect on next
-    start). Either way this is the one thing setup's whitelist disclaimer tells people
-    to do, so it's worth being a real button instead of instructions to follow by hand."""
+    """Adds a player to the whitelist - via RCON if the server's running, otherwise
+    straight into whitelist.json for the next start."""
     username = username.strip()
     if not username:
         return ActionResult(False, ["Enter a Minecraft username."])
@@ -331,82 +281,21 @@ def add_to_whitelist(cfg, server_dir, username):
         return ActionResult(False, [f"Couldn't find a Minecraft account named {username!r}."])
     uuid, name = resolved
 
-    wl_path = server_dir / "whitelist.json"
-    entries = []
-    notes = []
-    # Initialised out here, not inside the block below: the write further down
-    # checks it unconditionally, and there's no whitelist.json to inspect at all on
-    # the very first add.
-    salvage = None
-    if wl_path.exists():
-        try:
-            raw = wl_path.read_text(encoding="utf-8")
-        except OSError as e:
-            # Refused rather than treated as empty. The file is RIGHT THERE and we
-            # just can't read it this instant (antivirus or a cloud-sync agent
-            # holding it, a sharing violation) - that says nothing about it being
-            # empty. Falling back to [] here would rewrite the file containing only
-            # the new player, silently deleting everyone already whitelisted, and
-            # report success while doing it.
-            return ActionResult(
-                False,
-                [
-                    f"Couldn't read {wl_path.name} ({e}) - not touching it, since overwriting it "
-                    "would remove everyone already whitelisted. Close anything that might have the "
-                    "file open and try again.",
-                ],
-            )
-        try:
-            entries = json.loads(raw)
-        except json.JSONDecodeError:
-            entries = None
-        # Valid JSON isn't necessarily the list-of-objects Minecraft expects; a
-        # stray "{}" would otherwise blow up on the .get() below.
-        # A genuinely corrupt file does have to be replaced - Minecraft can't read
-        # it either - but the old contents get kept alongside rather than thrown
-        # away. The actual move happens further down, deliberately: doing it here
-        # (before the replacement had been written) meant a failed write left the
-        # user with no whitelist.json at all AND no message, since the note naming
-        # the salvage file is only delivered on success.
-        if not isinstance(entries, list):
-            salvage = wl_path.with_name(f"whitelist.json.corrupt-{time.strftime('%Y%m%d-%H%M%S')}")
-            entries = []
-    if any(isinstance(e, dict) and e.get("uuid") == uuid for e in entries):
-        return ActionResult(True, [f"{name!r} is already whitelisted."])
-    entries.append({"uuid": uuid, "name": name})
-    # Write-then-rename, like config.py/users.py/auto_assignments.py: a crash or
-    # power loss partway through a direct write is exactly what produces the
-    # truncated file the corruption branch above has to deal with.
-    tmp_path = wl_path.with_suffix(".json.tmp")
+    from .setup_flow import write_whitelist
+
     try:
-        tmp_path.write_text(json.dumps(entries, indent=2), encoding="utf-8")
-        # Only now that a good replacement exists on disk is the corrupt original
-        # moved aside, so a write failure above leaves everything exactly as it was.
-        if salvage is not None:
-            wl_path.replace(salvage)
-            notes.append(
-                f"{wl_path.name} wasn't readable as a whitelist, so it was set aside as "
-                f"{salvage.name} and a fresh one started - any players it listed need re-adding."
-            )
-        os.replace(tmp_path, wl_path)
+        added, note = write_whitelist(server_dir, uuid, name)
     except OSError as e:
-        lines = [f"Couldn't write {wl_path.name} ({e}) - {name!r} was not added."]
-        # Cleanup is itself best-effort: whatever blocked the write (antivirus or a
-        # sync agent holding the new .tmp) can equally block removing it, and
-        # letting that raise from in here would throw away the explanation above -
-        # the caller would surface a bare OSError instead. A stray .tmp is worth
-        # far less than the message.
-        try:
-            tmp_path.unlink(missing_ok=True)
-        except OSError:
-            pass
-        try:
-            if salvage is not None and salvage.exists():
-                lines.append(f"The unreadable original is at {salvage.name}.")
-        except OSError:
-            pass
-        return ActionResult(False, lines)
+        return ActionResult(
+            False,
+            [
+                f"Couldn't update whitelist.json ({e}) - {name!r} was not added. Close anything that "
+                "might have the file open and try again."
+            ],
+        )
+    if not added:
+        return ActionResult(True, [f"{name!r} is already whitelisted."])
     return ActionResult(
         True,
-        notes + [f"Added {name!r} to the whitelist (server isn't running - takes effect on next start)."],
+        ([note] if note else []) + [f"Added {name!r} to the whitelist (server isn't running - takes effect on next start)."],
     )

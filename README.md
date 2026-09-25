@@ -161,7 +161,7 @@ mcpersist/
   java_manager.py         auto-downloads a matching portable Java (Temurin) if needed
   javacheck.py            detects an installed Java's version
   mojang.py               UUID -> username lookups (for whitelist/op)
-  tunnel_relay.py        launches the tunnel client as a detached process
+  net.py                  HTTP GETs and downloads (plain urllib)
   tunnel_relay_run.py     the tunnel client itself - talks to the relay
   process_manager.py     detached-process/PID-file management
   paths.py                filesystem locations (config.json, servers/, bin/) - frozen-aware

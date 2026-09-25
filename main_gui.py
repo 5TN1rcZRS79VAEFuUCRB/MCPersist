@@ -3,7 +3,7 @@ mcpersist package so its relative imports resolve correctly.
 
 Also doubles as the entry point for the tunnel client subprocess: since a frozen
 build's sys.executable is this same .exe (there's no separate python.exe bundled),
-tunnel_relay.py re-invokes it with a sentinel flag instead of "-m", and this checks
+actions.start_tunnel re-invokes it with a sentinel flag instead of "-m", and this checks
 for that flag before falling through to the normal GUI."""
 
 import sys

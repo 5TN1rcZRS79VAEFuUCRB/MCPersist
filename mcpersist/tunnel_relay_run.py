@@ -3,6 +3,7 @@ relay (see relay/relay_server.py) and bridges each player connection it's handed
 the local Minecraft server. Reconnects with backoff if the relay connection drops."""
 
 import asyncio
+import functools
 import json
 import ssl
 from pathlib import Path
@@ -14,55 +15,26 @@ LOCAL_PORT = 25565
 ASSIGNED_ADDRESS_PATH = Path("assigned_address.txt")
 TUNNEL_START_MARKER = "tunnel starting"
 
-# Bounds every network-blocking await below (connecting, TLS handshake, waiting for
-# the registration reply) - without it, a relay that accepts the TCP/TLS connection
-# and then just stalls (an overloaded relay, a network black hole) hangs this
-# forever with no exception ever raised, which means main()'s own except/retry loop
-# never gets a chance to run either - silently defeating the "reconnects with
-# backoff" behavior this module's docstring promises.
+# Bounds every network await (connect, TLS handshake, registration reply): a relay that
+# accepts and then stalls would otherwise hang this forever, and main()'s reconnect loop
+# would never run.
 CONNECT_TIMEOUT = 15
 
-# Bounds pipe()'s per-player read/drain the same way the relay's own pipe() was
-# hardened in a prior round (relay_server.PIPE_IDLE_TIMEOUT) - without it, a
-# network partition or firewall drop between here and the relay's data port (or a
-# genuinely hung local Minecraft server) leaves one direction blocked on read()
-# forever with no FIN ever arriving, and since handle_connect spawns a fresh task
-# and socket pair per incoming player, repeated stalls over a long-running
-# server's lifetime accumulate unbounded leaked tasks/sockets with nothing to
-# ever clean them up.
+# Bounds each player pipe's read/drain, so a dropped network path or hung local server
+# can't leak a task and socket pair per player forever.
 PIPE_IDLE_TIMEOUT = 300
 
-# The relay pings every ~20s (see relay_server.PING_INTERVAL) specifically so a
-# genuinely dead peer can be detected even when TCP itself never delivers a
-# clean FIN/RST (a network partition, an expired NAT/firewall mapping) - but
-# that only helps if something on THIS side is actually watching for it. Without
-# a timeout here, the steady-state `reader.readline()` below hangs forever in
-# that exact scenario: no exception is ever raised, so run_once() never returns,
-# so main()'s reconnect-with-backoff loop (the entire point of this module, per
-# its own docstring) never gets a chance to fire. The tunnel process stays alive
-# and still LOOKS running (status/GUI show no error) while silently relaying
-# nothing. Comfortably larger than PING_INTERVAL so normal jitter never
-# false-positives.
+# The relay pings every ~20s; without a timeout here a dead connection with no FIN hangs
+# readline() forever, looking healthy while relaying nothing. Well above PING_INTERVAL
+# to allow for jitter.
 CONTROL_IDLE_TIMEOUT = 90
 
-# The control/data channels carry per-user tokens and now require TLS on the relay
-# side (see relay/relay_server.py) - the default system CA bundle is enough to
-# verify a real Let's Encrypt cert, same as any normal HTTPS client. The local
-# connection to the Minecraft server itself (127.0.0.1) is never wrapped - that's
-# plain loopback traffic to a process on this same machine, nothing to encrypt.
-#
-# Built lazily (and cached) rather than at module import time - a failure here (a
-# corrupted or inaccessible certificate store - rare, but real) would otherwise
-# crash the whole process before main()'s own error handling ever gets a chance to
-# print something useful and retry, unlike every other failure mode in this file.
-_tls_context_cache = None
-
-
+# Control/data channels are TLS; the system CA bundle verifies the relay's cert. Built
+# on first use, not at import, so a broken certificate store goes through main()'s retry
+# loop instead of crashing.
+@functools.cache
 def _get_tls_context():
-    global _tls_context_cache
-    if _tls_context_cache is None:
-        _tls_context_cache = ssl.create_default_context()
-    return _tls_context_cache
+    return ssl.create_default_context()
 
 
 async def pipe(reader, writer):
@@ -115,11 +87,8 @@ async def run_once(cfg):
         asyncio.open_connection(relay_host, control_port, ssl=_get_tls_context(), server_hostname=relay_host),
         timeout=CONNECT_TIMEOUT,
     )
-    # Every return path below used to leak this writer/transport - unlike pipe() in
-    # this same file (and every handler in relay_server.py), none of them closed it
-    # explicitly, relying on GC to eventually reclaim it. Since main() calls
-    # run_once() in an infinite reconnect loop, any relay restart, network blip, or
-    # registration hiccup leaked one socket per cycle.
+    # Closed on every return path - main() calls this in an endless reconnect loop, so a
+    # leak here is one socket per cycle.
     try:
         register_msg = {"type": "register"}
         if subdomain and token:
@@ -154,9 +123,8 @@ async def run_once(cfg):
             if msg.get("type") == "connect":
                 asyncio.create_task(handle_connect(relay_host, data_port, msg["id"]))
             elif msg.get("type") == "ping":
-                # The relay's own liveness check (see relay_server.py's PING_TIMEOUT) -
-                # answering keeps this connection's subdomain from being evicted as
-                # stale while it's still genuinely alive and just has no players.
+                # Answer the relay's liveness check, so an idle tunnel isn't evicted as
+                # stale.
                 writer.write((json.dumps({"type": "pong"}) + "\n").encode("utf-8"))
                 await asyncio.wait_for(writer.drain(), timeout=CONNECT_TIMEOUT)
     finally:

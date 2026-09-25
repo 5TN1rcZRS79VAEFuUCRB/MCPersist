@@ -8,6 +8,8 @@ from pathlib import Path
 
 import nbtlib
 
+from . import javacheck
+
 
 def default_instance_dir():
     appdata = os.environ.get("APPDATA")
@@ -17,26 +19,16 @@ def default_instance_dir():
     return path if path.exists() else None
 
 
-# MultiMC-family launchers (Prism's own lineage) all use the same on-disk shape:
-# <LauncherRoot>/instances/<name>/minecraft/ (or, on some forks/older versions,
-# .minecraft/). Checked by folder name under %APPDATA% rather than anything more
-# specific, so a launcher added later just needs its folder name added here.
+# MultiMC-family launchers share one layout: <root>/instances/<name>/minecraft/ (or
+# .minecraft/). A new one just needs its folder name here.
 _MULTIMC_FAMILY_LAUNCHERS = ("PrismLauncher", "MultiMC", "PolyMC", "ATLauncher")
 
-# The Modrinth App (Theseus) uses a differently-named top-level folder
-# ("profiles", not "instances") and a flat layout - Minecraft's own files sit
-# directly under <profile>/, with no nested minecraft/.minecraft subfolder the
-# way the MultiMC family has - confirmed against Modrinth's own support docs
-# (%APPDATA%\ModrinthApp\profiles\<name>\saves\<world>\), not guessed. The
-# second entry is where older installs kept the same layout before a rename.
+# The Modrinth App keeps profiles/<name>/ with Minecraft's files directly inside; the
+# second name is its older folder.
 _MODRINTH_LAUNCHERS = ("ModrinthApp", "com.modrinth.theseus")
 
-# A directory "looks like" a real Minecraft instance if it has any of these - not
-# launcher-specific parsing, so this works across launchers (and Minecraft versions)
-# without needing to know each one's exact metadata format. A brand-new instance
-# that's never actually been launched yet may have none of these, but there's
-# nothing useful to promote from one anyway (no world to detect a version/loader
-# from), so missing all of them is a reasonable thing to skip.
+# A folder looks like a Minecraft instance if it has any of these - no launcher-specific
+# parsing. A never-launched instance has none, but also nothing to set up from.
 _INSTANCE_MARKERS = ("saves", "mods", "resourcepacks", "options.txt", "servers.dat")
 
 
@@ -45,14 +37,9 @@ def _looks_like_instance_dir(path):
 
 
 def find_instances():
-    """Scans common launcher locations under %APPDATA% for Minecraft instance
-    folders, so setup can offer a pick-list instead of requiring the instance
-    folder to be typed in or browsed to by hand every time. Best-effort and
-    heuristic (see _looks_like_instance_dir) rather than parsing each launcher's
-    own format, so it degrades gracefully instead of needing an update every time
-    a launcher changes its metadata - and manual entry/Browse still work
-    regardless of what this finds. Returns a list of {"name", "path"} dicts,
-    already de-duplicated by resolved path."""
+    """Minecraft instance folders found under %APPDATA%, as [{"name", "path"}]
+    de-duplicated by resolved path. Best-effort, so setup can offer a pick-list;
+    typing or browsing still works regardless."""
     appdata = os.environ.get("APPDATA")
     if not appdata:
         return []
@@ -71,39 +58,23 @@ def find_instances():
     if vanilla.exists() and _looks_like_instance_dir(vanilla):
         add("Official Launcher", vanilla)
 
-    for launcher_name in _MULTIMC_FAMILY_LAUNCHERS:
-        instances_dir = appdata / launcher_name / "instances"
-        if not instances_dir.exists():
-            continue
+    launchers = [(name, "instances", name) for name in _MULTIMC_FAMILY_LAUNCHERS]
+    launchers += [(name, "profiles", "Modrinth App") for name in _MODRINTH_LAUNCHERS]
+    for folder, subdir, label in launchers:
         try:
-            entries = sorted(instances_dir.iterdir())
+            entries = sorted((appdata / folder / subdir).iterdir())
         except OSError:
             continue
         for instance_dir in entries:
             if not instance_dir.is_dir():
                 continue
-            nested = next(
-                (instance_dir / sub for sub in ("minecraft", ".minecraft") if (instance_dir / sub).exists()),
-                None,
-            )
-            if nested is not None and _looks_like_instance_dir(nested):
-                add(f"{instance_dir.name} ({launcher_name})", nested)
-            elif _looks_like_instance_dir(instance_dir):
-                # Some launchers (e.g. ATLauncher) put Minecraft's own files
-                # directly in the instance folder instead of a nested subfolder.
-                add(f"{instance_dir.name} ({launcher_name})", instance_dir)
-
-    for launcher_name in _MODRINTH_LAUNCHERS:
-        profiles_dir = appdata / launcher_name / "profiles"
-        if not profiles_dir.exists():
-            continue
-        try:
-            entries = sorted(profiles_dir.iterdir())
-        except OSError:
-            continue
-        for profile_dir in entries:
-            if profile_dir.is_dir() and _looks_like_instance_dir(profile_dir):
-                add(f"{profile_dir.name} (Modrinth App)", profile_dir)
+            # MultiMC-family launchers nest Minecraft's files in minecraft/ or
+            # .minecraft/; ATLauncher and the Modrinth App don't.
+            nested = next((instance_dir / sub for sub in ("minecraft", ".minecraft") if (instance_dir / sub).exists()), None)
+            for candidate in (nested, instance_dir):
+                if candidate is not None and _looks_like_instance_dir(candidate):
+                    add(f"{instance_dir.name} ({label})", candidate)
+                    break
 
     return found
 
@@ -135,11 +106,9 @@ SUPPORTED_LOADERS = ("vanilla", "fabric", "forge", "neoforge")
 
 
 def _detect_loader_from_curseforge_manifest(instance_dir):
-    """CurseForge isn't itself a loader - it's a launcher wrapping Forge/NeoForge/
-    Fabric underneath. minecraftinstance.json's exact schema isn't officially
-    documented, so this is best-effort: if the field we expect isn't there in the
-    shape we expect, just report "unknown" and let the other, more reliable checks
-    (versions/ folder naming, fabric mod jars) decide instead."""
+    """CurseForge wraps Forge/NeoForge/Fabric; its minecraftinstance.json isn't
+    documented, so this is best-effort and returns None when unsure, leaving it to
+    the other checks."""
     manifest_path = Path(instance_dir) / "minecraftinstance.json"
     if not manifest_path.exists():
         return None
@@ -178,17 +147,15 @@ def detect_loader(instance_dir):
     mods_dir = instance_dir / "mods"
     if mods_dir.exists():
         for jar in mods_dir.glob("*.jar"):
-            if "fabric-loader" in jar.name.lower() or re.search(r"fabric-api", jar.name, re.I):
+            if any(part in jar.name.lower() for part in ("fabric-loader", "fabric-api")):
                 return "fabric"
 
     return "vanilla"
 
 
 def is_world_open(save_path):
-    """True if Minecraft currently has this save open. The game holds a lock on
-    session.lock for as long as the world is loaded; copying then fails partway on
-    that locked file (leaving a partial copy), and even apart from the lock, the
-    region files are still being written, so a copy could be inconsistent."""
+    """True if Minecraft has this save open (it holds session.lock while loaded) -
+    copying it then fails partway or captures region files mid-write."""
     import msvcrt
 
     lock_path = Path(save_path) / "session.lock"
@@ -219,11 +186,9 @@ def copy_world(save_path, dest_dir, world_subdir_name="world"):
 
 
 def find_owner_uuid(server_world_dir):
-    """A singleplayer world's per-player-data folder has one <uuid>.dat per player
-    who's ever spawned in it - for a fresh singleplayer world that's exactly one file,
-    and its name is the owner's UUID. Ambiguous cases (0 or 2+) return None rather
-    than guessing wrong. Checks both the traditional path (playerdata/) and the
-    layout newer Minecraft versions (26.2+) restructured it into (players/data/)."""
+    """The owner's UUID: a fresh singleplayer world has exactly one <uuid>.dat in its
+    player data. None for 0 or 2+ rather than guessing. Checks both playerdata/ and
+    the 26.2+ players/data/ layout."""
     for candidate in ("players/data", "playerdata"):
         playerdata_dir = Path(server_world_dir) / candidate
         if not playerdata_dir.exists():
@@ -237,45 +202,26 @@ def find_owner_uuid(server_world_dir):
     return None
 
 
-def read_prism_java_major(instance_dir):
-    """Prism Launcher records the Java version it resolved for an instance in
-    instance.cfg (one level above the .minecraft folder) - trust that over our
-    own version->Java guess table, since it's launcher-maintained and won't go
-    stale as new Minecraft versions ship."""
+def _read_instance_cfg(instance_dir, key):
+    """A value from Prism Launcher's instance.cfg (one level above the .minecraft
+    folder), or None."""
     cfg_path = Path(instance_dir).parent / "instance.cfg"
     if not cfg_path.exists():
         return None
     for line in cfg_path.read_text(encoding="utf-8", errors="replace").splitlines():
-        if line.startswith("JavaVersion="):
-            value = line.split("=", 1)[1].strip()
-            match = re.match(r"^(\d+)(?:\.(\d+))?", value)
-            if match:
-                major = int(match.group(1))
-                # This is a Java *runtime version string*, and the legacy form puts
-                # the real major second: Java 8 is written "1.8.0_312", so taking
-                # only the leading component returned 1. That then got persisted as
-                # required_java_major and sent java_manager.ensure_java() hunting
-                # for a nonexistent "Java 1" (and downloading Adoptium feature
-                # version 1), instead of the Java 8 the launcher had just told us.
-                # Modern strings ("25.0.1") are unaffected. Same handling
-                # javacheck.detected_major_version already does for `java -version`.
-                if major == 1 and match.group(2):
-                    return int(match.group(2))
-                return major
+        if line.startswith(f"{key}="):
+            return line.split("=", 1)[1].strip() or None
     return None
+
+
+def read_prism_java_major(instance_dir):
+    value = _read_instance_cfg(instance_dir, "JavaVersion")
+    return javacheck.parse_major(value) if value else None
 
 
 def read_prism_intended_version(instance_dir):
-    """Prism Launcher records the instance's Minecraft version in instance.cfg (one
-    level above the .minecraft folder) - used to prefill the version field when
-    generating a brand-new world, since there's no level.dat yet to read it from."""
-    cfg_path = Path(instance_dir).parent / "instance.cfg"
-    if not cfg_path.exists():
-        return None
-    for line in cfg_path.read_text(encoding="utf-8", errors="replace").splitlines():
-        if line.startswith("IntendedVersion="):
-            return line.split("=", 1)[1].strip() or None
-    return None
+    """Prefills the version for a brand-new world, which has no level.dat to read."""
+    return _read_instance_cfg(instance_dir, "IntendedVersion")
 
 
 def required_java_major(mc_version_str, instance_dir=None):
@@ -291,9 +237,8 @@ def required_java_major(mc_version_str, instance_dir=None):
         return 17
     major, minor = int(match.group(1)), int(match.group(2))
     patch = int(match.group(3) or 0)
-    # Year-based versions (26.1+) need Java 25. Only reached when Mojang's manifest
-    # (the normal source) is unavailable, but "26.2" compared as (26, 2, 0) is
-    # greater than (1, 20, 5) and used to fall into the Java 21 row below.
+    # Year-based versions (26.1+) need Java 25 - only reached when Mojang's manifest is
+    # unavailable.
     if major >= 26:
         return 25
     if (major, minor, patch) >= (1, 20, 5):

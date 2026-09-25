@@ -2,7 +2,9 @@
 the save, downloading a matching server, owner whitelisting - shared by the CLI and
 the GUI so neither duplicates it."""
 
+import contextlib
 import json
+import os
 import shutil
 import time
 from pathlib import Path
@@ -13,15 +15,10 @@ from .paths import SERVERS_DIR
 
 
 def _refuse_while_active_world_running(switch_target=None):
-    """Setting up or switching worlds repoints config.json at another world. Doing
-    that while the active world's server or tunnel is still running orphans them:
-    the app can no longer see or stop them, the next Start collides with the old
-    server still holding port 25565, and a second tunnel gets refused by the relay.
-    Re-running setup on the running world itself is worse - it moves the world
-    folder aside while Minecraft has files open in it.
-
-    Returns an ActionResult refusal, or None when it's safe to proceed. Switching to
-    the world that's already active changes nothing, so that stays allowed."""
+    """Setting up or switching worlds repoints config.json; doing it while the active
+    world's server or tunnel runs orphans them (and re-setup of the running world
+    moves its folder aside while Minecraft has it open). Returns a refusal, or None
+    when safe. Switching to the already-active world is allowed."""
     cfg = config.load()
     active = cfg.get("world_name")
     server_dir = config.server_dir(cfg)
@@ -46,14 +43,6 @@ def _refuse_while_active_world_running(switch_target=None):
     )
 
 
-def default_instance_dir():
-    return str(world.default_instance_dir() or "")
-
-
-def find_instances():
-    return world.find_instances()
-
-
 def list_worlds(instance_dir):
     if not instance_dir or not Path(instance_dir).exists():
         return ActionResult(False, [f"Instance folder not found: {instance_dir!r}"])
@@ -76,9 +65,8 @@ def detect_world_info(instance_dir, world_name):
 
 
 def detect_new_world_info(instance_dir):
-    """Same shape as detect_world_info, but for a world that doesn't exist yet -
-    there's no level.dat to read a version from, so it's a best-effort guess from the
-    launcher's own instance metadata (still editable by the user either way)."""
+    """Same shape as detect_world_info, for a world that doesn't exist yet - a
+    best-effort guess from the launcher's instance metadata."""
     return {
         "mc_version": world.read_prism_intended_version(instance_dir),
         "suggested_loader": world.detect_loader(instance_dir),
@@ -86,15 +74,10 @@ def detect_new_world_info(instance_dir):
 
 
 def _is_path_safe_name(world_name):
-    """The security-relevant half of valid_new_world_name, without its length cap.
-    It becomes a directory name directly under servers/ (no separators/"..", so it
-    can't escape that directory) and gets written verbatim into server.properties'
-    motd line - also reject control characters (newlines in particular), which
-    would otherwise inject extra lines into that file. Used on its own for an
-    existing world's name (see prepare_world) - already a real directory on disk,
-    so already a legal Windows path component, but the length cap below exists for
-    freshly-typed-name sanity, not as part of the actual safety boundary, so it
-    shouldn't reject a long name that was already fine as a real folder."""
+    """The safety half of valid_new_world_name, without its length cap: no path
+    separators or ".." (it becomes a folder under servers/) and no control characters
+    (it's written into server.properties). Used alone for existing worlds, whose
+    folder names are already legal."""
     if not world_name or not world_name.strip():
         return False
     if world_name in (".", ".."):
@@ -112,9 +95,7 @@ def valid_new_world_name(world_name):
 
 GAMEMODES = ("survival", "creative", "adventure", "spectator")
 DIFFICULTIES = ("peaceful", "easy", "normal", "hard")
-# Display label -> the actual server.properties value. Namespaced ("minecraft:...")
-# rather than the older bare-word values (DEFAULT/FLAT/...) - matches what modern
-# (1.19+) servers, the only ones this app targets, actually expect.
+# Display label -> server.properties value, namespaced as modern (1.19+) servers expect.
 LEVEL_TYPES = {
     "Default": "minecraft:normal",
     "Superflat": "minecraft:flat",
@@ -124,16 +105,30 @@ LEVEL_TYPES = {
 }
 
 
+def world_options(gamemode, difficulty, level_type, generate_structures, spawn_protection, seed=""):
+    """The new-world generation settings for write_server_properties. Spawn protection
+    is clamped to the GUI spinbox's [0, 500], and only the seed's first line is kept -
+    a raw newline would inject an extra line into server.properties."""
+    options = {
+        "gamemode": gamemode,
+        "difficulty": difficulty,
+        "level-type": level_type,
+        "generate-structures": "true" if generate_structures else "false",
+        "spawn-protection": str(max(0, min(500, int(spawn_protection)))),
+    }
+    seed = (seed or "").strip().splitlines()
+    if seed and seed[0]:
+        options["level-seed"] = seed[0]
+    return options
+
+
 def write_eula(server_dir):
     (Path(server_dir) / "eula.txt").write_text("eula=true\n", encoding="utf-8")
 
 
 def write_server_properties(server_dir, cfg, enable_whitelist, world_options=None):
-    """world_options optionally carries the new-world generation settings (gamemode,
-    difficulty, level-type, generate-structures, spawn-protection, level-seed) - only
-    meaningful the first time a brand-new world is created (an existing, already-
-    generated world's terrain/seed can't retroactively change), so callers only pass
-    it from the "Generate New World" path."""
+    """world_options optionally carries the new-world generation settings (see
+    world_options()) - only meaningful for a brand-new world."""
     props = {
         "server-port": "25565",
         "level-name": "world",
@@ -150,80 +145,127 @@ def write_server_properties(server_dir, cfg, enable_whitelist, world_options=Non
         props.update(world_options)
     path = Path(server_dir) / "server.properties"
     if path.exists():
-        # Re-running setup on an existing server (the only way to change its
-        # version or loader) used to regenerate this from scratch: every setting
-        # the owner had changed (max-players, pvp, difficulty, ...) was lost, and
-        # when the owner couldn't be re-detected it wrote white-list=false -
-        # quietly opening a locked-down server to anyone. Existing settings are
-        # kept; only the keys MCPersist manages are updated, and a whitelist that
-        # was on stays on. The motd is left alone too, since it's often customised.
-        existing = {}
-        for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
-            if "=" in line and not line.lstrip().startswith("#"):
-                k, v = line.split("=", 1)
-                existing[k] = v
-        if existing.get("white-list", "").strip().lower() == "true":
+        # Re-setup keeps the owner's own settings: only the keys MCPersist manages
+        # change, a whitelist that was on stays on, and a customised motd is kept.
+        existing = read_server_properties(server_dir)
+        if existing.get("white-list", "").lower() == "true":
             props["white-list"] = "true"
         if "motd" in existing:
             props.pop("motd")
         update_server_properties(server_dir, props)
         return
-    lines = [f"{k}={v}" for k, v in props.items()]
-    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    path.write_text("".join(f"{k}={v}\n" for k, v in props.items()), encoding="utf-8")
+
+
+# surrogateescape round-trips bytes that aren't valid UTF-8 (a hand-edited motd, say)
+# unchanged, so reading and rewriting the file never fails on them or mangles them.
+_PROPS_ENCODING = {"encoding": "utf-8", "errors": "surrogateescape"}
+
+
+def _split_property(line):
+    """(key, value) for a key=value line, or None for blanks and comments. Whitespace
+    around the key and value is ignored, as Java's own Properties parser does."""
+    stripped = line.strip()
+    if not stripped or stripped[0] in "#!" or "=" not in stripped:
+        return None
+    key, value = stripped.split("=", 1)
+    return key.strip(), value.strip()
+
+
+def read_server_properties(server_dir):
+    """server.properties as a dict ({} if it doesn't exist yet)."""
+    path = Path(server_dir) / "server.properties"
+    if not path.exists():
+        return {}
+    return dict(filter(None, map(_split_property, path.read_text(**_PROPS_ENCODING).splitlines())))
 
 
 def update_server_properties(server_dir, updates):
     """Patches specific keys in an existing server.properties, preserving everything
-    else - unlike write_server_properties (which regenerates the whole file, only
-    appropriate at first setup), this is safe to call before every start so
-    auto-sized settings like view-distance stay current without clobbering state that
-    changes independently of MCPersist, like the whitelist toggle via RCON/in-game."""
+    else - safe to call before every start, so auto-sized settings stay current
+    without clobbering things changed outside MCPersist (the whitelist toggle)."""
     path = Path(server_dir) / "server.properties"
     if not path.exists():
         return
-    lines = path.read_text(encoding="utf-8").splitlines()
-    remaining = dict(updates)
+    lines = path.read_text(**_PROPS_ENCODING).splitlines()
+    seen = set()
     for i, line in enumerate(lines):
-        if "=" not in line or line.strip().startswith("#"):
-            continue
-        key = line.split("=", 1)[0]
-        if key in remaining:
-            lines[i] = f"{key}={remaining.pop(key)}"
-    lines.extend(f"{k}={v}" for k, v in remaining.items())
-    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        kv = _split_property(line)
+        # Every occurrence, not just the first: Java reads the last duplicate.
+        if kv and kv[0] in updates:
+            lines[i] = f"{kv[0]}={updates[kv[0]]}"
+            seen.add(kv[0])
+    lines.extend(f"{k}={v}" for k, v in updates.items() if k not in seen)
+    path.write_text("\n".join(lines) + "\n", **_PROPS_ENCODING)
 
 
-def _merge_player_entry(path, entry):
-    """Adds/updates one player in a whitelist.json/ops.json-style list, keeping
-    everyone else. These used to be overwritten with just the owner, so re-running
-    setup on an existing server removed every friend from its whitelist and ops.
-    An unreadable file is kept aside rather than silently discarded."""
+def merge_player_entry(path, entry):
+    """Adds or updates one player in a whitelist.json/ops.json-style list, keeping
+    everyone else and any fields already on that player's entry. Returns (added,
+    note): added is False if they were already listed; note names where a corrupt
+    original was set aside. Raises OSError if the file can't be read or written - an
+    unreadable file is never treated as empty, which would drop every other player."""
     path = Path(path)
-    players = []
+    players, salvage = [], None
     if path.exists():
+        # utf-8-sig: Notepad and PowerShell save with a BOM, which plain utf-8 rejects.
+        raw = path.read_text(encoding="utf-8-sig")
         try:
-            loaded = json.loads(path.read_text(encoding="utf-8"))
-            if not isinstance(loaded, list):
-                raise ValueError("not a list")
+            loaded = json.loads(raw)
+        except ValueError:
+            loaded = None
+        if isinstance(loaded, list):
             players = [p for p in loaded if isinstance(p, dict)]
-        except (ValueError, OSError):
-            path.replace(path.with_name(f"{path.name}.corrupt-{time.strftime('%Y%m%d-%H%M%S')}"))
-            players = []
-    players = [p for p in players if str(p.get("uuid", "")).lower() != entry["uuid"].lower()]
-    players.insert(0, entry)
+        else:
+            salvage = path.with_name(f"{path.name}.corrupt-{time.strftime('%Y%m%d-%H%M%S')}")
+
+    existing = next((p for p in players if str(p.get("uuid", "")).lower() == entry["uuid"].lower()), None)
+    merged = {**entry, **(existing or {}), "uuid": entry["uuid"], "name": entry["name"]}
+    players = [p for p in players if p is not existing] + [merged]
+
     tmp = path.with_name(path.name + ".tmp")
-    tmp.write_text(json.dumps(players, indent=2), encoding="utf-8")
-    tmp.replace(path)
+    try:
+        tmp.write_text(json.dumps(players, indent=2), encoding="utf-8")
+        # The corrupt original is moved aside only once its replacement exists.
+        if salvage:
+            path.replace(salvage)
+        os.replace(tmp, path)
+    except OSError:
+        with contextlib.suppress(OSError):
+            tmp.unlink(missing_ok=True)
+        raise
+    note = None
+    if salvage:
+        note = (
+            f"{path.name} wasn't readable as a player list, so it was set aside as {salvage.name} "
+            "and a fresh one started - any players it listed need re-adding."
+        )
+    return existing is None, note
 
 
 def write_whitelist(server_dir, uuid, name):
-    _merge_player_entry(Path(server_dir) / "whitelist.json", {"uuid": uuid, "name": name})
+    return merge_player_entry(Path(server_dir) / "whitelist.json", {"uuid": uuid, "name": name})
 
 
 def write_ops(server_dir, uuid, name):
-    _merge_player_entry(
+    return merge_player_entry(
         Path(server_dir) / "ops.json", {"uuid": uuid, "name": name, "level": 4, "bypassesPlayerLimit": False}
     )
+
+
+def _whitelist_owner(server_dir, uuid, name, lines):
+    """Adds the owner to whitelist.json, appending any note to lines. Returns a failed
+    ActionResult if the file couldn't be read or written, else None."""
+    try:
+        _, note = write_whitelist(server_dir, uuid, name)
+    except OSError as e:
+        return ActionResult(
+            False,
+            lines + [f"Couldn't update whitelist.json ({e}). Close anything that might have it open, then run setup again."],
+        )
+    if note:
+        lines.append(note)
+    return None
 
 
 def _whitelist_result_lines(whitelisted, owner_name, not_whitelisted_reason):
@@ -259,9 +301,8 @@ def _whitelist_result_lines(whitelisted, owner_name, not_whitelisted_reason):
 
 
 def prepare_world(instance_dir, world_name):
-    """Copies the world save and detects/whitelists the owner. Split from
-    finish_setup so callers can show the detected owner (and ask about cheats) before
-    kicking off the slow server-jar download."""
+    """Copies the world save and detects/whitelists the owner. Split from finish_setup
+    so the owner can be shown before the slow server download."""
     if not _is_path_safe_name(world_name):
         return ActionResult(False, [f"{world_name!r} isn't a valid world name."])
     refusal = _refuse_while_active_world_running()
@@ -269,9 +310,8 @@ def prepare_world(instance_dir, world_name):
         return refusal
 
     save_path = Path(instance_dir) / "saves" / world_name
-    # Before anything is created, moved aside or copied: an open world makes the
-    # copy fail partway (after an existing server copy was already moved aside)
-    # or, without the lock, capture region files mid-write.
+    # Before anything is moved or copied: an open world makes the copy fail partway or
+    # capture region files mid-write.
     if world.is_world_open(save_path):
         return ActionResult(
             False,
@@ -286,19 +326,9 @@ def prepare_world(instance_dir, world_name):
     (server_dir / "logs").mkdir(exist_ok=True)
 
     lines = []
-    # Moved aside rather than left for copy_world to clear: copy_world starts with
-    # rmtree(dest), so re-running setup on a world that was already set up here
-    # would destroy the server's copy - which by then holds however much
-    # multiplayer progress has accumulated since - and replace it with the
-    # (likely long-stale) singleplayer save. That's a reachable path, not a
-    # hypothetical: re-running setup is the only way to change a world's
-    # Minecraft version or mod loader, so wanting to do it on an existing world
-    # is a normal thing to want. prepare_new_world already refuses outright in
-    # its equivalent situation, but refusing here would block that legitimate
-    # reason, so nothing is deleted and the user is told where the old copy went.
-    # (The "your original singleplayer world is untouched" note below is about
-    # the source save - it says nothing about this destination, which is exactly
-    # why losing it here would be so easy to miss.)
+    # Moved aside, not overwritten: re-setup (the only way to change version or loader)
+    # would otherwise replace the server's copy - with all its multiplayer progress - by
+    # the stale singleplayer save.
     existing_world = server_dir / "world"
     if existing_world.exists():
         backup_name = f"world.replaced-{time.strftime('%Y%m%d-%H%M%S')}"
@@ -321,30 +351,35 @@ def prepare_world(instance_dir, world_name):
     owner_name = mojang.username_for_uuid(owner_uuid) if owner_uuid else None
     whitelisted = bool(owner_uuid and owner_name)
     if whitelisted:
-        write_whitelist(server_dir, owner_uuid, owner_name)
+        failure = _whitelist_owner(server_dir, owner_uuid, owner_name, lines)
+        if failure:
+            return failure
         not_whitelisted_reason = None
     else:
         # find_owner_uuid returns None for both "no players" and "several"; a UUID
-        # with no name means Mojang's lookup failed (often just the network) - which
-        # used to be reported as "more than one player found".
+        # with no name means Mojang's lookup failed (often just the network).
         if owner_uuid:
             why = "found the owner's account ID, but couldn't look up their username from Mojang"
         else:
             why = "zero or several players found in this world's saved data"
         not_whitelisted_reason = f"Couldn't automatically identify the world owner ({why})"
-    existing_props = server_dir / "server.properties"
-    whitelist_already_on = existing_props.exists() and any(
-        line.strip().lower() == "white-list=true"
-        for line in existing_props.read_text(encoding="utf-8", errors="replace").splitlines()
-    )
-    if not whitelisted and whitelist_already_on:
+    from .actions import get_whitelist_info
+
+    whitelist_on, whitelist_names = get_whitelist_info(server_dir)
+    if not whitelisted and whitelist_on:
         # Re-setup of a server whose whitelist is already on: write_server_properties
-        # keeps it on and whitelist.json is untouched, so "leaving it OFF" plus the
-        # open-server disclaimer would be false.
-        lines.append(
-            f"{not_whitelisted_reason}. This server's existing whitelist stays ON with its "
-            "current players - nothing about who can join was changed."
-        )
+        # keeps it on, so "leaving it OFF" plus the open-server disclaimer would be false.
+        if whitelist_names:
+            lines.append(
+                f"{not_whitelisted_reason}. This server's existing whitelist stays ON with its "
+                f"current players ({', '.join(whitelist_names)}) - nothing about who can join was changed."
+            )
+        else:
+            lines.append(
+                f"{not_whitelisted_reason}. This server's whitelist is ON but has nobody on it, so "
+                "nobody - including you - can join. Add yourself with `run.bat whitelist-add <username>` "
+                "before starting it."
+            )
     else:
         lines.extend(_whitelist_result_lines(whitelisted, owner_name, not_whitelisted_reason))
 
@@ -356,12 +391,9 @@ def prepare_world(instance_dir, world_name):
 
 
 def prepare_new_world(instance_dir, world_name, owner_username):
-    """Sets up a server directory for a brand-new world - there's no existing save to
-    copy, the Minecraft server generates it itself on first start. The owner can't be
-    auto-detected from player data that doesn't exist yet, so it's resolved from a
-    typed-in username instead - required, not optional, since with the whitelist on
-    (always, for a new world - there's no existing owner to leave it off for) nobody
-    including the owner can join without it."""
+    """Sets up a server directory for a brand-new world, which the server generates on
+    first start. The owner comes from a typed-in username - required, since the
+    whitelist is always on for a new world."""
     if not owner_username or not owner_username.strip():
         return ActionResult(False, ["A Minecraft username is required - nobody can join a whitelisted server without one."])
     refusal = _refuse_while_active_world_running()
@@ -383,7 +415,9 @@ def prepare_new_world(instance_dir, world_name, owner_username):
     resolved = mojang.uuid_for_username(owner_username.strip())
     if resolved:
         owner_uuid, owner_name = resolved
-        write_whitelist(server_dir, owner_uuid, owner_name)
+        failure = _whitelist_owner(server_dir, owner_uuid, owner_name, lines)
+        if failure:
+            return failure
         whitelisted = True
         not_whitelisted_reason = None
     else:
@@ -398,9 +432,7 @@ def prepare_new_world(instance_dir, world_name, owner_username):
 
 
 def _copy_mods_and_report(lines, instance_dir, server_dir):
-    """Shared by Fabric and Forge - both are just jar drops in a mods/ folder as
-    far as this is concerned, loader-specific only in name (it lives in
-    server_fabric.py from when Fabric was the only mod loader supported)."""
+    """Shared by every mod loader - they're all jar drops in mods/."""
     mods, skipped_mods = server_fabric.copy_mods(instance_dir, server_dir)
     if mods:
         lines.append(f"Copied {len(mods)} mod(s) into the server's mods/ folder.")
@@ -420,24 +452,11 @@ def _copy_mods_and_report(lines, instance_dir, server_dir):
 def finish_setup(
     instance_dir, world_name, mc_version, loader, owner_uuid, owner_name, copy_mods=True, world_options=None
 ):
-    """Downloads/installs the matching server (vanilla/Fabric: a direct jar
-    download; Forge: running its own installer, since it doesn't publish one), ops
-    the owner if one was whitelisted, and writes eula/server.properties/
-    config.json. Assumes prepare_world already ran.
-
-    copy_mods controls whether the instance's current mods/ folder gets pulled in -
-    only ever passed False for a brand-new world, which isn't "ported" from the
-    instance the way an existing save is, so dragging along whatever mods that
-    instance currently happens to have doesn't make sense the same way.
-
-    world_options is passed straight through to write_server_properties - see there.
-
-    The owner is always opped when known, not a choice - getting into a whitelisted
-    server at all already means they're trusted enough to be there, so there's no
-    real distinction left to ask about."""
-    # Checked again here, not just in prepare: Start is one click away between the
-    # two steps, and this is the call that installs over the server and repoints
-    # config.json.
+    """Downloads/installs the matching server, ops the owner if known, and writes eula,
+    server.properties and config.json. Assumes prepare_world already ran. copy_mods
+    is False for a brand-new world, which isn't ported from the instance.
+    world_options goes to write_server_properties."""
+    # Checked again: Start is one click away between prepare and finish.
     refusal = _refuse_while_active_world_running()
     if refusal:
         return refusal
@@ -447,18 +466,14 @@ def finish_setup(
     setup_failed = False
     lines = []
     if owner_uuid and owner_name:
-        write_ops(server_dir, owner_uuid, owner_name)
-        lines.append(f"Opped {owner_name!r}.")
+        try:
+            _, note = write_ops(server_dir, owner_uuid, owner_name)
+            lines += [f"Opped {owner_name!r}."] + ([note] if note else [])
+        except OSError as e:
+            lines.append(f"WARNING: couldn't update ops.json ({e}) - {owner_name!r} wasn't opped.")
 
-    # Resolved before the loader-specific block below, not after (as it used to
-    # be) - Forge's installer is itself a jar that has to be run with a real java,
-    # so it needs this settled first. Vanilla/Fabric don't need it this early, but
-    # aren't harmed by it either.
-    #
-    # Mojang's own manifest is authoritative and current; the hardcoded table in
-    # world.py is a fallback guess for when that lookup isn't available (offline,
-    # very old versions) - it goes stale every time a new Minecraft version bumps its
-    # Java requirement, so prefer the live value whenever we can get one.
+    # Resolved first: Forge's installer needs a real java. Mojang's manifest is
+    # authoritative; world.py's table is only a fallback.
     required_java = server_vanilla.required_java_major(mc_version) or world.required_java_major(
         mc_version, instance_dir=instance_dir
     )
@@ -491,9 +506,8 @@ def finish_setup(
     if loader == "vanilla":
         server_vanilla.download_server_jar(mc_version, jar_path)
     elif loader in ("forge", "neoforge"):
-        # NeoForge installs and launches exactly like modern Forge (installer run
-        # with --installServer, then a win_args.txt) - only where the installer
-        # comes from and where the args file lands differ.
+        # NeoForge installs and launches like modern Forge - only the installer source
+        # and args file location differ.
         if loader == "forge":
             module, label = server_forge, "Forge"
             forge_version = server_forge.get_recommended_forge_version(mc_version)
@@ -505,12 +519,10 @@ def finish_setup(
             installer_path = server_dir / "neoforge-installer.jar"
             server_neoforge.download_installer(forge_version, installer_path)
         lines.append(f"{label} {forge_version} - running its installer ...")
-        java_exe = javacheck.find_java(cfg.get("java_path") or "java")
+        java_exe = shutil.which(cfg.get("java_path") or "java")
         if not java_exe:
-            # Recorded as a real failure, not just a warning line: without the
-            # installer having run there is no runnable server here at all, and
-            # reporting "Setup complete." would make config.json point at a world
-            # that cannot start, with the only explanation buried mid-log.
+            # A real failure, not a warning: there's no runnable server, and "Setup
+            # complete." would point config.json at a world that can't start.
             setup_failed = True
             lines.append(
                 f"ERROR: no working Java found, so {label}'s installer couldn't run - this world has no "
@@ -518,7 +530,7 @@ def finish_setup(
                 '"java_path" in config.json, then run setup again.'
             )
         else:
-            module.run_installer(java_exe, installer_path, server_dir)
+            server_forge.run_installer(java_exe, installer_path, server_dir, name=label)
             installer_path.unlink(missing_ok=True)
             if module.find_launch_args_file(server_dir, mc_version) is None:
                 setup_failed = True
@@ -556,10 +568,8 @@ def finish_setup(
         f"{config.ensure_simulation_distance(cfg)} based on this PC's specs - change this anytime "
         "in the Performance section of the status screen."
     )
-    # config/meta are still written even on failure, deliberately: the world is set
-    # up apart from the missing server, so fixing Java and re-running setup (or
-    # switching to it later) picks up right where this left off rather than starting
-    # over. Only the reported outcome changes - "Setup complete." would be a lie.
+    # config and meta are still written on failure, so fixing Java and re-running setup
+    # picks up where this left off.
     if setup_failed:
         lines.append("Setup did NOT complete - see the error above. Fix it and run setup again.")
         return ActionResult(False, lines)
@@ -581,44 +591,22 @@ WORLD_META_FIELDS = (
 
 
 def write_world_meta(server_dir, cfg):
-    """Snapshots the settings needed to make this world the active one again later
-    without re-running setup - everything else (rcon port/password, whitelist state)
-    already lives in this world's own server.properties/whitelist.json, so it doesn't
-    need to be duplicated here too."""
+    """Snapshots the settings needed to make this world active again without re-running
+    setup; the rest lives in its own server.properties/whitelist.json."""
     meta = {field: cfg.get(field) for field in WORLD_META_FIELDS}
     (Path(server_dir) / "mcpersist_meta.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
 
 
-def _backfill_active_world_meta():
-    """A world set up before mcpersist_meta.json existed won't show up in
-    list_known_servers() - there's no way to recover settings for a world that isn't
-    the currently active one, since config.json only ever reflects whichever world is
-    active right now. But the currently active world's settings are sitting right
-    there in config.json, so if its server directory is missing metadata, write it now
-    rather than leaving it invisible to "switch to a previous server" forever."""
-    cfg = config.load()
-    world_name = cfg.get("world_name")
-    if not world_name:
-        return
-    server_dir = SERVERS_DIR / world_name
-    if server_dir.exists() and not (server_dir / "mcpersist_meta.json").exists():
-        write_world_meta(server_dir, cfg)
-
-
 def list_known_servers():
-    """Every world MCPersist has set up before, discovered by scanning servers/
-    itself rather than tracked in a separate registry - the filesystem is already the
-    source of truth, so this can't go stale relative to what's actually there."""
+    """Every world MCPersist has set up, found by scanning servers/ - the filesystem is
+    the source of truth."""
     if not SERVERS_DIR.exists():
         return []
-    _backfill_active_world_meta()
     found = []
     for entry in sorted(SERVERS_DIR.iterdir()):
         meta_path = entry / "mcpersist_meta.json"
-        # ".importing-*" is an in-progress world import (see import_worlds_from),
-        # which can already hold a copied mcpersist_meta.json while the rest of its
-        # files are still being written - it would otherwise list as a normal,
-        # selectable world mid-copy.
+        # ".importing-*" is an import in progress, possibly already holding a copied
+        # mcpersist_meta.json.
         if not entry.is_dir() or entry.name.startswith(".") or not meta_path.exists():
             continue
         try:
@@ -632,18 +620,10 @@ def list_known_servers():
 
 
 def import_worlds_from(source_root):
-    """Recovers worlds from another MCPersist install (e.g. an old folder left
-    behind after a manual reinstall, done by hand because self-update failed) -
-    each world folder under servers/ is already fully self-contained
-    (mcpersist_meta.json + server.properties + whitelist.json + the world save
-    itself), the same thing that makes "Switch to a Previous Server" work at
-    all, so recovering one is just copying that folder over - nothing further
-    to reconstruct. Accepts either the old install's root folder or its
-    servers/ folder directly, whichever the user happened to pick. Skips (and
-    reports, rather than silently overwriting) any world whose name already
-    exists in the current servers/ - if that one still has server.jar/a
-    running config the user cares about, clobbering it would be a real loss,
-    not a convenience."""
+    """Recovers worlds from another MCPersist install (say, a manual reinstall). Each
+    world folder is self-contained, so this is a folder copy. Accepts the old
+    install's root or its servers/ folder, and skips (and reports) any world whose
+    name already exists here."""
     source_root = Path(source_root)
     source_servers = source_root / "servers"
     if not source_servers.is_dir():
@@ -656,12 +636,8 @@ def import_worlds_from(source_root):
     if source_servers == SERVERS_DIR.resolve():
         return ActionResult(False, ["That's already this install's own servers folder - nothing to import."])
 
-    # Dot-prefixed dirs are skipped for the same reason list_known_servers skips
-    # them: a ".importing-<name>" left behind by an interrupted import in the
-    # SOURCE install is a partial copy, not a world. Importing one would also
-    # shadow the real thing - it sorts before the actual name, so it'd be copied
-    # and then deleted again by the staging cleanup for the real world, while
-    # still being counted as imported.
+    # Skip dot-prefixed dirs: a leftover ".importing-<name>" in the source is a partial
+    # copy, not a world.
     candidates = [
         entry
         for entry in sorted(source_servers.iterdir())
@@ -683,17 +659,9 @@ def import_worlds_from(source_root):
         if dest.exists():
             skipped.append(entry.name)
             continue
-        # Copied into a staging directory and renamed into place, rather than
-        # written straight to dest: copytree going directly to the final path
-        # leaves a PARTIAL world behind if it dies halfway (a failing external
-        # drive, a full disk, a file locked by another program). A partial copy is
-        # worse than no copy - it can already contain mcpersist_meta.json, so it
-        # lists as a perfectly valid world in "Switch to a Previously Set-Up
-        # Server" while its region files are incomplete, and Minecraft regenerates
-        # missing chunks as fresh terrain instead of reporting anything wrong.
-        # Retrying the import wouldn't help either: dest.exists() would be true, so
-        # it'd be reported as "already present (not overwritten)". The rename is
-        # atomic within the same filesystem, so dest only ever exists complete.
+        # Copied to a staging directory and renamed into place: a copy that dies halfway
+        # must not leave a partial world that lists as valid (Minecraft would regenerate
+        # the missing chunks as fresh terrain).
         staging = SERVERS_DIR / f".importing-{entry.name}"
         shutil.rmtree(staging, ignore_errors=True)  # leftover from an earlier interrupted attempt
         try:
@@ -723,10 +691,8 @@ def import_worlds_from(source_root):
 
 
 def switch_to_world(world_name):
-    """Makes a previously set-up world the active one - just repoints config.json at
-    it using its own saved metadata (see write_world_meta) plus the rcon port/password
-    already sitting in its server.properties. No re-download or owner-detection,
-    since all of that already happened the first time this world was set up."""
+    """Makes a previously set-up world the active one: repoints config.json using its
+    saved metadata plus the rcon settings in its server.properties."""
     server_dir = SERVERS_DIR / world_name
     meta_path = server_dir / "mcpersist_meta.json"
     if not meta_path.exists():
@@ -746,23 +712,12 @@ def switch_to_world(world_name):
     for field in WORLD_META_FIELDS:
         if field in meta:
             cfg[field] = meta[field]
-    # Assigned unconditionally, unlike the rest above: leaving a stale value here
-    # is actively harmful rather than merely out of date, because it's the Java
-    # version the *previously active* world needed and start_server only
-    # re-resolves it when it's None. Switching a 1.21 world to a 1.16.5 one would
-    # otherwise launch 1.16.5 under Java 21, and the reverse dies instantly with
-    # UnsupportedClassVersionError, surfaced only as "Server process exited
-    # immediately". Worlds whose meta file predates this field being saved have
-    # nothing to restore, so they get it cleared and re-resolved from scratch.
-    cfg["required_java_major"] = meta.get("required_java_major")
 
-    props_path = server_dir / "server.properties"
-    if props_path.exists():
-        for line in props_path.read_text(encoding="utf-8", errors="replace").splitlines():
-            if line.strip().startswith("rcon.port="):
-                cfg["rcon_port"] = int(line.split("=", 1)[1].strip() or cfg["rcon_port"])
-            elif line.strip().startswith("rcon.password="):
-                cfg["rcon_password"] = line.split("=", 1)[1].strip() or cfg["rcon_password"]
+    props = read_server_properties(server_dir)
+    if props.get("rcon.port", "").isdigit():
+        cfg["rcon_port"] = int(props["rcon.port"])
+    if props.get("rcon.password"):
+        cfg["rcon_password"] = props["rcon.password"]
 
     config.save(cfg)
     return ActionResult(True, [f"Switched to {world_name!r}."])

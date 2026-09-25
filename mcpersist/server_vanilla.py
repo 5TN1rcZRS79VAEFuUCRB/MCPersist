@@ -1,40 +1,25 @@
 """Downloads the vanilla server jar matching a Minecraft version, via Mojang's public
 version manifest."""
 
+import functools
 import hashlib
 import os
-from pathlib import Path
 
-import requests
+from . import net
 
 VERSION_MANIFEST_URL = "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json"
 
-# A single setup can hit this manifest 2-3+ times independently (the version
-# dropdown, required_java_major, get_server_jar_url each fetch it separately) -
-# it's a few hundred KB and doesn't change within one run of the app, so caching it
-# in-process avoids re-downloading the same thing repeatedly for no benefit.
-_manifest_cache = None
-
-# Same reasoning, one level down: a single finish_setup() call fetches one
-# version's own per-version manifest twice (once via required_java_major, again
-# via _get_server_download/download_server_jar) - keyed by version since, unlike
-# the top-level manifest, this is a different URL per Minecraft version.
-_version_meta_cache = {}
-
-
+# Cached per run: one setup fetches the manifest and a version's own manifest
+# several times over (version dropdown, required Java, the jar download).
+@functools.cache
 def _get_manifest():
-    global _manifest_cache
-    if _manifest_cache is None:
-        _manifest_cache = requests.get(VERSION_MANIFEST_URL, timeout=30).json()
-    return _manifest_cache
+    return net.get_json(VERSION_MANIFEST_URL)
 
 
 def list_release_versions():
-    """Release-type Minecraft versions from Mojang's manifest, newest first - powers
-    the setup wizard's version dropdown. Excludes snapshots/betas/alphas, which
-    aren't a good fit for what's meant to be a persistent server. Returns [] (not an
-    exception) on any failure - callers fall back to whatever version was already
-    detected, if any, so a network hiccup doesn't block setup entirely."""
+    """Release versions from Mojang's manifest, newest first, for the version picker
+    (snapshots don't suit a persistent server). Returns [] on any failure, so a
+    network hiccup doesn't block setup."""
     try:
         manifest = _get_manifest()
         return [v["id"] for v in manifest["versions"] if v.get("type") == "release"]
@@ -42,16 +27,13 @@ def list_release_versions():
         return []
 
 
+@functools.cache
 def get_version_meta(mc_version):
-    if mc_version in _version_meta_cache:
-        return _version_meta_cache[mc_version]
     manifest = _get_manifest()
     entry = next((v for v in manifest["versions"] if v["id"] == mc_version), None)
     if entry is None:
         raise ValueError(f"Minecraft version {mc_version!r} not found in Mojang's manifest")
-    meta = requests.get(entry["url"], timeout=30).json()
-    _version_meta_cache[mc_version] = meta
-    return meta
+    return net.get_json(entry["url"])
 
 
 def _get_server_download(mc_version):
@@ -62,54 +44,23 @@ def _get_server_download(mc_version):
     return server
 
 
-def get_server_jar_url(mc_version):
-    return _get_server_download(mc_version)["url"]
-
-
 def required_java_major(mc_version):
-    """The authoritative required Java version, straight from Mojang's own per-version
-    manifest - used instead of guessing from a hardcoded version table (world.py's
-    fallback), which goes stale every time a new Minecraft version bumps the
-    requirement (it did: 26.2 needs Java 25, not the 21 a fixed table assumed).
-    Returns None if unavailable (very old versions, network issues)."""
+    """The required Java version from Mojang's per-version manifest - authoritative,
+    unlike world.py's fallback table, which goes stale with each new requirement.
+    None if unavailable."""
     try:
         return get_version_meta(mc_version).get("javaVersion", {}).get("majorVersion")
     except Exception:
         return None
 
 
-def download_to_part(url, dest_path, hasher=None):
-    """Streams url into <dest>.part and returns that path; the caller verifies it and
-    then os.replace()s it over dest. Never writes dest directly: re-running setup (the
-    only way to change a world's version) downloads over an existing, working
-    server.jar, and writing it in place meant a dropped connection left it truncated
-    and a failed check deleted it - reproduced with a real local server that drops
-    mid-transfer. Removes the .part itself on a failed transfer."""
-    part = Path(str(dest_path) + ".part")
-    try:
-        resp = requests.get(url, stream=True, timeout=60)
-        resp.raise_for_status()
-        with open(part, "wb") as f:
-            for chunk in resp.iter_content(chunk_size=1 << 16):
-                f.write(chunk)
-                if hasher is not None:
-                    hasher.update(chunk)
-    except BaseException:
-        part.unlink(missing_ok=True)
-        raise
-    return part
-
-
 def download_server_jar(mc_version, dest_path):
     server = _get_server_download(mc_version)
     hasher = hashlib.sha1()
-    part = download_to_part(server["url"], dest_path, hasher)
+    part = net.download_to_part(server["url"], dest_path, hasher)
 
-    # Mojang's manifest publishes a sha1 for every download - this is a jar that's
-    # about to be executed as a server process, so it's worth actually checking
-    # instead of trusting a plain HTTPS GET not to have been corrupted or tampered
-    # with in transit (a compromised/misbehaving CDN edge, not just a threat from
-    # Mojang's own infrastructure).
+    # Mojang publishes a sha1 for every download; this jar is about to be executed, so
+    # check it.
     expected_sha1 = server.get("sha1")
     if expected_sha1 and hasher.hexdigest() != expected_sha1:
         part.unlink(missing_ok=True)
