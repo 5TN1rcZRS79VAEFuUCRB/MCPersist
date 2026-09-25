@@ -1,35 +1,35 @@
-# e4mc
+# MCPersist
 
-[![Modrinth Downloads](https://img.shields.io/modrinth/dt/qANg5Jrr?color=%2300af5c&logo=modrinth&style=for-the-badge)](https://modrinth.com/project/qANg5Jrr)
-[![Modrinth Followers](https://img.shields.io/modrinth/followers/qANg5Jrr?color=00af5c&logo=modrinth&style=for-the-badge)](https://modrinth.com/project/qANg5Jrr)
-[![CurseForge Downloads](https://img.shields.io/curseforge/dt/849519?style=for-the-badge&logo=curseforge&logoColor=f16436&color=f16436)](https://curseforge.com/minecraft/mc-mods/e4mc)
+e4mc, but your world keeps running after you leave.
 
-Open a LAN server to anyone, anywhere, anytime.
+MCPersist v2 is a Fabric mod based on [e4mc](https://github.com/vgskye/e4mc-minecraft-architectury). Like
+e4mc, it puts your LAN world on the internet at an address your friends can join with an unmodded client.
+It also lets you mark a world as persistent. When you leave that world, or close the game, it keeps running
+as a headless server in the background on your machine, and it keeps the same address every time.
 
-## Install
+> **Status: early development.** Right now this is a renamed e4mc fork that builds for the latest Minecraft
+> release. The persistence features are tracked in the
+> [v2 spec](https://github.com/5TN1rcZRS79VAEFuUCRB/persistent-e4mc/issues/1).
 
-[Modrinth](https://modrinth.com/project/qANg5Jrr)
+Looking for MCPersist v1, the Windows app? It lives on the [`v1` branch](../../tree/v1).
 
-### Maven
+## Requirements
 
-e4mc is available in [Skyeven](https://maven.skye.vg) under the coordinates `link.e4mc:e4mc_minecraft-[platform]:[version]`.
+- Fabric, on the latest Minecraft release (26.x)
+- Fabric API
 
-## Usage
+MCPersist can't be installed alongside e4mc.
 
-Open to LAN as normal
+## Building
 
-## Contributing
+Needs JDK 21 or newer.
 
-Please contribute
+```
+./gradlew :fabric:modernRemapJar
+```
 
-### Related repositories
+The jar is written to `fabric/build/libs/mcpersist-fabric-<version>-modern.jar`.
 
-The following repositories may also be considered a part of e4mc:
+## Credits and license
 
-- [e4mc-quiclime](https://github.com/vgskye/e4mc-quiclime) is the relay-side code
-- my fork of [netty-incubator-codec-quic](https://github.com/vgskye/netty-incubator-codec-quic)
-- [iroh-java](https://github.com/vgskye/iroh-java) is used for Dialtone
-
-## License
-
-[MIT](LICENSE)
+Based on e4mc by Skye. MIT licensed; see [LICENSE](LICENSE).

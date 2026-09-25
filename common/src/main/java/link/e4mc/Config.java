@@ -5,7 +5,7 @@ import folk.sisby.kaleido.lib.quiltconfig.api.annotations.Comment;
 import folk.sisby.kaleido.lib.quiltconfig.api.values.TrackedValue;
 
 public class Config extends ReflectiveConfig {
-    public static final Config INSTANCE = Config.createToml(Agnos.configDir(), "e4mc", "e4mc", Config.class);
+    public static final Config INSTANCE = Config.createToml(Agnos.configDir(), "mcpersist", "mcpersist", Config.class);
 
     @Comment("Whether to hide the domain on chat and only allow copying")
     public final TrackedValue<Boolean> hideDomainInChat = this.value(false);

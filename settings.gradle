@@ -10,7 +10,8 @@ pluginManagement {
 
 include("common")
 include("fabric")
-include("forge")
-include("neoforge")
+// Fabric only for now; the forge and neoforge projects are kept for later.
+// include("forge")
+// include("neoforge")
 
-rootProject.name = "e4mc_minecraft_architectury"
+rootProject.name = "mcpersist"

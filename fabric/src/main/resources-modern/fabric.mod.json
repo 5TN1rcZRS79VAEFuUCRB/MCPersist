@@ -1,15 +1,15 @@
 {
   "schemaVersion": 1,
-  "id": "e4mc",
+  "id": "mcpersist",
   "version": "${version}+modern",
-  "name": "e4mc",
-  "description": "Open a LAN server to anyone, anywhere, anytime.",
+  "name": "MCPersist",
+  "description": "e4mc, but your world keeps running after you leave. Based on e4mc by skyevg.",
   "authors": [
     "skyevg"
   ],
   "contact": {
-    "homepage": "https://e4mc.link/",
-    "sources": "https://github.com/vgskye/e4mc-minecraft-architectury"
+    "homepage": "https://github.com/5TN1rcZRS79VAEFuUCRB/MCPersist",
+    "sources": "https://github.com/5TN1rcZRS79VAEFuUCRB/MCPersist"
   },
   "license": "MIT",
   "icon": "e4mc_icon.png",
@@ -25,6 +25,9 @@
   "depends": {
     "fabric-api": "*",
     "minecraft": ">=26.1-"
+  },
+  "breaks": {
+    "e4mc": "*"
   },
   "provides": [
     "e4mc_minecraft"
