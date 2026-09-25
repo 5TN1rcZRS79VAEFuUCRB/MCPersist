@@ -3,6 +3,7 @@ runner: the parts that can't be exercised on Linux (window flags, schtasks, msvc
 locks, the Windows certificate store, the PowerShell updater) plus a real server
 start/stop."""
 
+import json
 import os
 import subprocess
 import sys
@@ -27,7 +28,6 @@ from mcpersist import (
     world,
 )
 
-RELEASE_ZIP = "https://github.com/5TN1rcZRS79VAEFuUCRB/MCPersist/releases/download/v0.1.75/MCPersist-windows.zip"
 
 
 def step(name):
@@ -46,6 +46,8 @@ def wait_for(cond, timeout, what):
 step("HTTPS over urllib with the Windows certificate store")
 release = net.get_json(update_checker.LATEST_RELEASE_API)
 print("latest release:", release["tag_name"])
+# The rest of the test installs and runs this, the actual published build.
+RELEASE_ZIP = next(a["browser_download_url"] for a in release["assets"] if a["name"].endswith(".zip"))
 part = net.download_to_part(RELEASE_ZIP, Path(tempfile.mkdtemp()) / "rel.zip")
 assert "MCPersist.exe" in zipfile.ZipFile(part).namelist()
 
@@ -186,6 +188,28 @@ assert (install / "MCPersist.exe").stat().st_size > 1000
 assert (install / "_internal" / "marker.txt").read_text() == "kept"
 assert not update_checker.UPDATE_LOG_PATH.exists()
 print("updated and relaunched:", relaunched().exe())
+wait_for(lambda: (install / "gui.pid").exists(), 60, "the packaged GUI to finish starting (gui.pid)")
+time.sleep(10)
+assert relaunched() is not None, "packaged GUI exited shortly after starting"
+
+step("Packaged exe: tunnel mode, TLS with the bundled Python's certificate handling")
+# github.com:443 as a stand-in relay: a verified TLS handshake followed by a
+# non-JSON reply proves the packaged build's TLS works, without touching the real relay.
+(install / "config.json").write_text(json.dumps({"relay_host": "github.com", "relay_control_port": 443}))
+tunnel_log = tmp / "frozen-tunnel.log"
+tunnel_pid = process_manager.launch_detached([str(install / "MCPersist.exe"), "--tunnel-relay-run"], cwd=tmp, log_path=tunnel_log)
+try:
+    wait_for(
+        lambda: any(m in tunnel_log.read_text(errors="replace") for m in actions._TUNNEL_ERROR_MARKERS),
+        60,
+        "the packaged tunnel to report its connection result",
+    )
+finally:
+    tunnel_output = tunnel_log.read_text(errors="replace")
+    print(repr(tunnel_output))
+    process_manager.stop_pid(tunnel_pid)
+assert "tunnel starting" in tunnel_output
+assert "CERTIFICATE" not in tunnel_output and "SSL" not in tunnel_output, "TLS failed in the packaged build"
 
 step("Self-update refused while MCPersist.exe is in use")
 run_update()
