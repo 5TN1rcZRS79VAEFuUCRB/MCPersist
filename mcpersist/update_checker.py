@@ -150,11 +150,11 @@ try {
         exit 1
     }
 
-    Log "Copy OK, relaunching $ExePath"
-    Start-Process -FilePath $ExePath
-    Log "Update complete"
-    Remove-Item -LiteralPath $StagingDir -Recurse -Force -ErrorAction SilentlyContinue
+    # The log goes before the relaunch: the new instance reports any log it finds
+    # as a failed update.
     Remove-Item -LiteralPath $LogPath -Force -ErrorAction SilentlyContinue
+    Start-Process -FilePath $ExePath
+    Remove-Item -LiteralPath $StagingDir -Recurse -Force -ErrorAction SilentlyContinue
 } catch {
     Log "FAILED: unexpected error: $($_.Exception.Message)"
     exit 1
