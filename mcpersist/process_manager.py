@@ -39,20 +39,22 @@ def launch_detached(cmd, cwd, log_path, short_tmp=False):
         env["TEMP"] = str(SHORT_TMP_DIR)
         env["TMP"] = str(SHORT_TMP_DIR)
 
-    proc = subprocess.Popen(
-        cmd,
-        cwd=str(cwd),
-        stdout=log_file,
-        stderr=subprocess.STDOUT,
-        stdin=subprocess.DEVNULL,
-        creationflags=DETACHED_FLAGS,
-        close_fds=True,
-        env=env,
-    )
+    proc = popen_detached(cmd, cwd=str(cwd), stdout=log_file, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, env=env)
     # The child has its own handle - close ours now, not whenever GC gets to it.
     log_file.close()
     _detached_procs.append(proc)
     return proc.pid
+
+
+def popen_detached(cmd, **kwargs):
+    """Popen with DETACHED_FLAGS. A job object that forbids breakaway (some launchers
+    and terminals, CI runners) makes CREATE_BREAKAWAY_FROM_JOB fail with "Access is
+    denied" - start the child inside the job instead."""
+    try:
+        return subprocess.Popen(cmd, creationflags=DETACHED_FLAGS, close_fds=True, **kwargs)
+    except PermissionError:
+        flags = DETACHED_FLAGS & ~subprocess.CREATE_BREAKAWAY_FROM_JOB
+        return subprocess.Popen(cmd, creationflags=flags, close_fds=True, **kwargs)
 
 
 # Pid files outlive their processes and PIDs get reused (after a restart, especially),

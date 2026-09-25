@@ -6,7 +6,6 @@ download fails visibly with the app still open."""
 
 import os
 import shutil
-import subprocess
 import sys
 import tempfile
 import time
@@ -238,7 +237,9 @@ def apply_update(download_url):
     updater_script = tmp_dir / "mcpersist_updater.ps1"
     updater_script.write_text(_UPDATER_PS1, encoding="utf-8")
 
-    proc = subprocess.Popen(
+    # Not DETACHED_PROCESS: powershell.exe started with no console at all from the
+    # windowed GUI stalls forever before running a line (see DETACHED_FLAGS).
+    proc = process_manager.popen_detached(
         [
             "powershell",
             "-NoProfile",
@@ -257,11 +258,6 @@ def apply_update(download_url):
             "-LogPath",
             str(log_path),
         ],
-        # CREATE_NO_WINDOW, not DETACHED_PROCESS: powershell.exe started with no console
-        # at all from the windowed GUI stalls forever before running a line.
-        # CREATE_BREAKAWAY_FROM_JOB so it outlives us.
-        creationflags=process_manager.DETACHED_FLAGS,
-        close_fds=True,
     )
 
     # Popen succeeding doesn't mean the script ran: a machine-level execution policy
