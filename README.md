@@ -1,6 +1,10 @@
-# MCPersist
+<p align="center">
+  <img src="common/src/main/resources/mcpersist_icon.png" alt="MCPersist icon" width="180">
+</p>
 
-e4mc, but your world keeps running after you leave.
+<h1 align="center">MCPersist</h1>
+
+<p align="center"><i>e4mc, but your world keeps running after you leave.</i></p>
 
 MCPersist v2 is a Fabric mod based on [e4mc](https://github.com/vgskye/e4mc-minecraft-architectury). Like
 e4mc, it puts your LAN world on the internet at an address your friends can join with an unmodded client.
