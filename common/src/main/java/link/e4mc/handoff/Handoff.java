@@ -69,7 +69,8 @@ public final class Handoff {
      * @param host            the world's owner: whitelisted, op level 4
      * @param players         everyone who joined while the host played: whitelisted
      * @param hostWhitelist   the host's in-game whitelist file, or null if their game doesn't use one;
-     *                        when given, the server's whitelist is replaced by it, so removals carry over
+     *                        when given, the server's whitelist is replaced by it (plus the host), so
+     *                        removals carry over, and {@code players} isn't needed
      */
     public record Spec(Path worldDir, Path clientModsDir, Path clientConfigDir, Path serversDir,
                        String minecraftVersion, String loaderVersion, Path java, String maxHeap,
@@ -218,12 +219,14 @@ public final class Handoff {
     }
 
     /**
-     * Whitelists the host and the session's players, on top of the host's in-game whitelist if
-     * there is one (otherwise on top of the server's existing entries), and makes the host op.
+     * Whitelists the host plus either the host's in-game whitelist, which already holds everyone
+     * who could join, or, without one, the session's players on top of the server's existing
+     * entries. Makes the host op.
      */
     private static void writeAccessLists(Path dir, Player host, List<Player> players, Path hostWhitelist) throws IOException {
         Map<UUID, JsonObject> whitelist = readList(hostWhitelist != null ? hostWhitelist : dir.resolve("whitelist.json"));
-        List<Player> allowed = new ArrayList<>(players);
+        // A session player the host removed from the whitelist mid-session stays removed.
+        List<Player> allowed = new ArrayList<>(hostWhitelist != null ? List.of() : players);
         allowed.add(host);
         for (Player player : allowed) {
             whitelist.putIfAbsent(player.id(), entry(player));

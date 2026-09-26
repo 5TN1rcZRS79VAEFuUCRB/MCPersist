@@ -378,7 +378,7 @@ def hand_off(cache, game, world, servers):
          "--world", str(world), "--mods", str(game / "mods"), "--config", str(game / "config"),
          "--servers", str(servers), "--minecraft", MINECRAFT_VERSION,
          "--loader", (cache / "loader.txt").read_text(), "--xmx", "768M",
-         "--host", f"{HOST[0]}:{HOST[1]}", "--players", f"{FRIEND[0]}:{FRIEND[1]}",
+         "--host", f"{HOST[0]}:{HOST[1]}", "--players", f"{FRIEND[0]}:{FRIEND[1]},{REMOVED[0]}:{REMOVED[1]}",
          "--whitelist", str(game / "whitelist.json")],
         capture_output=True, text=True, timeout=300, env=handoff_env(),
     )
@@ -412,9 +412,10 @@ def test_handoff(cache, relay_bin):
             (game / "config" / "mcpersist").mkdir(parents=True)
             (game / "config" / "mcpersist" / "mcpersist.toml").write_text(mod_config)
             servers = game / "mcpersist" / "servers"
-            # The host whitelisted someone who hasn't joined yet, and removed someone the
-            # background server still lists from an earlier handoff.
-            (game / "whitelist.json").write_text(json.dumps([{"uuid": ADDED[0], "name": ADDED[1]}]))
+            # The host whitelisted someone who hasn't joined yet, and removed someone who joined this
+            # session and whom the background server still lists from an earlier handoff.
+            (game / "whitelist.json").write_text(json.dumps(
+                [{"uuid": FRIEND[0], "name": FRIEND[1]}, {"uuid": ADDED[0], "name": ADDED[1]}]))
             (servers / world.name).mkdir(parents=True)
             (servers / world.name / "whitelist.json").write_text(json.dumps([{"uuid": REMOVED[0], "name": REMOVED[1]}]))
 

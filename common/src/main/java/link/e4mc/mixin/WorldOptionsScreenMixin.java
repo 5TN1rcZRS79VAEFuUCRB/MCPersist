@@ -26,7 +26,8 @@ public abstract class WorldOptionsScreenMixin {
         Path worldDir = server.getWorldPath(LevelResource.ROOT);
         layout.addChild(CycleButton.onOffBuilder(WorldPersistence.isPersistent(worldDir))
                 .withTooltip(value -> Tooltip.create(Component.translatable("options.mcpersist.persistent.tooltip")))
-                .create(Component.translatable("options.mcpersist.persistent"), (button, value) -> {
+                // As wide as the two-button rows above: the label doesn't fit a standard button.
+                .create(0, 0, 308, 20, Component.translatable("options.mcpersist.persistent"), (button, value) -> {
                     try {
                         WorldPersistence.setPersistent(worldDir, value);
                         if (!value) {
