@@ -6,7 +6,7 @@
 
 <p align="center"><i>e4mc, but your world keeps running after you leave.</i></p>
 
-MCPersist v2 is a Fabric mod based on [e4mc](https://github.com/vgskye/e4mc-minecraft-architectury). Like
+MCPersist v2 is a Fabric, NeoForge and Forge mod based on [e4mc](https://github.com/vgskye/e4mc-minecraft-architectury). Like
 e4mc, it puts your LAN world on the internet at an address your friends can join with an unmodded client.
 It also lets you mark a world as persistent. When you leave that world, or close the game, it keeps running
 as a headless server in the background on your machine, and it keeps the same address every time.
@@ -32,27 +32,34 @@ MCPersist v1, the Windows app, is discontinued and its relay is shut down. Its c
 
 ## Requirements
 
-- Fabric, on the latest Minecraft release (26.x)
-- Fabric API
+- Minecraft 26.3, with one of:
+  - Fabric, plus Fabric API
+  - NeoForge
+  - Forge
+
+Download the jar for your loader. A world's background server runs the same loader and mods as the
+game that hands it off; the first handoff installs that loader's server, which takes up to a minute.
 
 MCPersist can't be installed alongside e4mc.
 
 ## Building
 
-Needs JDK 25. The mod is compiled directly against Minecraft 26.3 (unobfuscated) with Fabric Loom.
+Needs JDK 25. The shared code in `common/` is compiled directly against Minecraft 26.3 (unobfuscated) by
+each loader's project: Fabric Loom, ModDevGradle and ForgeGradle.
 
 ```
-./gradlew :fabric:build
+./gradlew build
 python test/smoke.py fabric/build/libs/mcpersist-fabric-<version>.jar
 ```
 
-The smoke test downloads a Fabric server and runs it with the mod.
+The smoke test downloads the jar's loader server and runs it with the mod; pass a NeoForge or Forge jar to
+test that loader.
 
 ## Releasing
 
 Push a tag named after the version, e.g. `git tag v2.0.0-alpha.2 && git push origin v2.0.0-alpha.2`. The
-release workflow builds the jar with that version, attaches it to a GitHub Release (a pre-release for
-alpha, beta and rc versions), and publishes it to Modrinth.
+release workflow builds the three jars with that version, attaches them to a GitHub Release, and publishes
+one Modrinth version per loader (numbered `<version>+<loader>`).
 
 The Modrinth step runs once the repository has a `MODRINTH_TOKEN` secret (a Modrinth personal access token
 with the "Create versions" scope) and a `MODRINTH_PROJECT_ID` variable (the project's ID from its Modrinth
