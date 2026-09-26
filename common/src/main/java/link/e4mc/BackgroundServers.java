@@ -20,6 +20,8 @@ import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 
 /** The client's view of its worlds' background servers. */
 public final class BackgroundServers {
@@ -33,8 +35,12 @@ public final class BackgroundServers {
         return Minecraft.getInstance().getLevelSource().getLevelPath(levelId);
     }
 
+    /** Worlds whose background server is being stopped: not joinable, though still up for a moment. */
+    private static final Set<Path> STOPPING = ConcurrentHashMap.newKeySet();
+
     public static boolean isRunning(String levelId) {
-        return Handoff.isRunning(serversDir(), worldDir(levelId));
+        Path worldDir = worldDir(levelId);
+        return !STOPPING.contains(worldDir) && Handoff.isRunning(serversDir(), worldDir);
     }
 
     /** The server entry of the background server last joined from the world list. */
@@ -115,6 +121,7 @@ public final class BackgroundServers {
 
     /** Stops the world's background server off the render thread, then runs {@code then} on it. */
     public static void stop(Path worldDir, Runnable then) {
+        STOPPING.add(worldDir);
         new Thread(() -> {
             try {
                 Handoff.stop(serversDir(), worldDir);
@@ -122,6 +129,8 @@ public final class BackgroundServers {
                 Handoff.removeAutostart(serversDir(), worldDir);
             } catch (IOException e) {
                 E4mcClient.LOGGER.error("Failed to stop the background server for {}", worldDir, e);
+            } finally {
+                STOPPING.remove(worldDir);
             }
             Minecraft.getInstance().execute(then);
         }, "mcpersist-stop").start();
