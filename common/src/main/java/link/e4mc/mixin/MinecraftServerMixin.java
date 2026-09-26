@@ -49,6 +49,23 @@ public abstract class MinecraftServerMixin implements SessionPlayers {
     private volatile boolean mcpersist$shared;
 
     /**
+     * Opening the world takes it back from its background server: it shouldn't start at
+     * login any more unless this session is shared and handed off again.
+     */
+    @Inject(method = "runServer", at = @At("HEAD"))
+    private void mcpersist$removeAutostart(CallbackInfo ci) {
+        Path worldDir = getWorldPath(LevelResource.ROOT).toAbsolutePath().normalize();
+        if (isDedicatedServer() || !WorldPersistence.isPersistent(worldDir)) {
+            return;
+        }
+        try {
+            Handoff.removeAutostart(LocalHandoff.serversDir(), worldDir);
+        } catch (IOException e) {
+            E4mcClient.LOGGER.error("Failed to remove the autostart entry for {}", worldDir, e);
+        }
+    }
+
+    /**
      * Also marks the session open, so a shared session that dies without a handoff is noticed
      * next launch. A world played alone just closes, like any other.
      */

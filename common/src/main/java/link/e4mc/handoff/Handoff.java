@@ -117,6 +117,11 @@ public final class Handoff {
         }
     }
 
+    /** The world no longer starts at login, until its next handoff installs the entry again. */
+    public static void removeAutostart(Path serversDir, Path worldDir) throws IOException {
+        Autostart.remove(serverDir(serversDir, worldDir));
+    }
+
     /** Turning persistence off: stops the world's background server and removes its autostart. */
     public static StopResult disable(Path serversDir, Path worldDir) throws IOException {
         StopResult result = stop(serversDir, worldDir);

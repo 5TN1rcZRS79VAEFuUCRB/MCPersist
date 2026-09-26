@@ -118,6 +118,8 @@ public final class BackgroundServers {
         new Thread(() -> {
             try {
                 Handoff.stop(serversDir(), worldDir);
+                // Stopped means offline until the world is shared again, reboots included.
+                Handoff.removeAutostart(serversDir(), worldDir);
             } catch (IOException e) {
                 E4mcClient.LOGGER.error("Failed to stop the background server for {}", worldDir, e);
             }
