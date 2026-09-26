@@ -1,5 +1,6 @@
 package link.e4mc.mixin;
 
+import link.e4mc.BackgroundServers;
 import link.e4mc.E4mcClient;
 import link.e4mc.WorldPersistence;
 import net.minecraft.client.gui.components.CycleButton;
@@ -28,6 +29,9 @@ public abstract class WorldOptionsScreenMixin {
                 .create(Component.translatable("options.mcpersist.persistent"), (button, value) -> {
                     try {
                         WorldPersistence.setPersistent(worldDir, value);
+                        if (!value) {
+                            BackgroundServers.stop(worldDir, () -> {});
+                        }
                     } catch (IOException e) {
                         E4mcClient.LOGGER.error("Failed to save persistence setting for {}", worldDir, e);
                         button.setValue(!value);

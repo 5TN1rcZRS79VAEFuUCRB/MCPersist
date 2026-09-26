@@ -21,8 +21,10 @@
     "ClientHandshakePacketListenerImplMixin",
     "EditWorldScreenMixin",
     "PlayerListMixin",
+    "SelectWorldScreenMixin",
     "ServerAddressMixin",
     "ServerNameResolverMixin",
+    "WorldListEntryMixin",
     "WorldOptionsScreenMixin"
   ]
 }

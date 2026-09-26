@@ -284,6 +284,15 @@ FRIEND = ("66666666-7777-8888-9999-000000000000", "SmokeFriend")
 NIL_UUID = "00000000-0000-0000-0000-000000000000"
 
 
+def handoff_action(cache, world, servers, action):
+    classpath = os.pathsep.join([str(cache / "mod.jar"), str(cache / "gson.jar")])
+    return subprocess.run(
+        [os.environ.get("JAVA", "java"), "-cp", classpath, "link.e4mc.handoff.Handoff",
+         "--action", action, "--world", str(world), "--servers", str(servers)],
+        capture_output=True, text=True, timeout=180,
+    ).stdout.strip()
+
+
 def hand_off(cache, game, world, servers):
     """Runs the handoff entry point as the mod would, without a game window."""
     classpath = os.pathsep.join([str(cache / "mod.jar"), str(cache / "gson.jar")])
@@ -350,15 +359,28 @@ def test_handoff(cache, relay_bin):
                         second = hand_off(cache, game, world, servers)
                         if second.returncode == 0 or "open in another game or server" not in second.stderr:
                             fail(f"second handoff while the server runs was not refused: {second.stderr}")
+                    if handoff_action(cache, world, servers, "status") != "running":
+                        fail("status doesn't report the running server")
+                    stopped = handoff_action(cache, world, servers, "stop")
+                    if stopped != "stopped":
+                        fail(f"server wasn't stopped by its own stop command: {stopped!r}")
+                    if process_alive(pid):
+                        fail("server still running after stop")
+                    log = console.read_text(encoding="utf-8", errors="replace")
+                    if "Stopping server" not in log or "ThreadedAnvilChunkStorage" not in log and "Saving worlds" not in log:
+                        fail("server wasn't stopped cleanly (no save on shutdown)")
+                    if handoff_action(cache, world, servers, "status") != "stopped":
+                        fail("status still reports a stopped server as running")
                 finally:
-                    stop_process(pid)
+                    if process_alive(pid):
+                        stop_process(pid)
             if relay and domains[0] != domains[1]:
                 fail(f"handed-off world changed address: {domains}")
         finally:
             os.environ.pop("JAVA_TOOL_OPTIONS", None)
             if relay:
                 relay.kill()
-    print("PASS: handoff ran the world in place in a detached server, whitelisted and with the host as op"
+    print("PASS: handoff ran the world in place in a detached server, whitelisted, host as op, stopped cleanly"
           + (f" at {domains[0]} both times" if relay else ""))
 
 

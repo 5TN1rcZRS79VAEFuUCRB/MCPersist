@@ -8,14 +8,19 @@ import link.e4mc.WorldPersistence;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
+import java.io.DataInputStream;
 import java.io.OutputStream;
+import java.net.InetAddress;
 import java.net.ServerSocket;
+import java.net.Socket;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.channels.FileChannel;
 import java.nio.channels.FileLock;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 import java.nio.channels.OverlappingFileLockException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.DirectoryStream;
@@ -23,13 +28,18 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
+import java.security.SecureRandom;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Base64;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Properties;
 import java.util.UUID;
+import java.util.concurrent.TimeUnit;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 
@@ -183,6 +193,10 @@ public final class Handoff {
         // Players arrive through the relay; the local port is only for the host's own client.
         props.setProperty("server-ip", "127.0.0.1");
         props.setProperty("server-port", Integer.toString(freePort()));
+        // How MCPersist stops the server cleanly: it runs detached, with no console to type into.
+        props.setProperty("enable-rcon", "true");
+        props.setProperty("rcon.port", Integer.toString(freePort()));
+        props.setProperty("rcon.password", randomPassword());
         // A stable address gets found; only the host and their friends may join.
         props.setProperty("white-list", "true");
         props.setProperty("enforce-whitelist", "true");
@@ -247,6 +261,108 @@ public final class Handoff {
         }
     }
 
+    private static String randomPassword() {
+        byte[] bytes = new byte[18];
+        new SecureRandom().nextBytes(bytes);
+        return Base64.getUrlEncoder().withoutPadding().encodeToString(bytes);
+    }
+
+    private static Properties serverProperties(Path dir) throws IOException {
+        Properties props = new Properties();
+        try (InputStream in = Files.newInputStream(dir.resolve("server.properties"))) {
+            props.load(in);
+        }
+        return props;
+    }
+
+    /** The background server's process, if it is running. */
+    private static Optional<ProcessHandle> process(Path dir) {
+        Path pidFile = dir.resolve(PID_FILE);
+        if (!Files.exists(pidFile)) {
+            return Optional.empty();
+        }
+        try {
+            return ProcessHandle.of(Long.parseLong(Files.readString(pidFile).trim()))
+                    .filter(ProcessHandle::isAlive)
+                    // A reused PID belongs to some other program.
+                    .filter(p -> p.info().commandLine().map(c -> c.contains(SERVER_JAR)).orElse(true));
+        } catch (IOException | NumberFormatException e) {
+            return Optional.empty();
+        }
+    }
+
+    public static boolean isRunning(Path serversDir, Path worldDir) {
+        return process(serverDir(serversDir, worldDir)).isPresent();
+    }
+
+    /** The loopback port the host's own client connects to. */
+    public static int localPort(Path serversDir, Path worldDir) throws IOException {
+        return Integer.parseInt(serverProperties(serverDir(serversDir, worldDir)).getProperty("server-port"));
+    }
+
+    public enum StopResult { NOT_RUNNING, STOPPED, TERMINATED }
+
+    /**
+     * Stops the world's background server with its own stop command, which saves the world.
+     * If that fails, or it doesn't stop within a minute, terminates the process instead
+     * (which still saves on Linux and macOS, but not on Windows).
+     */
+    public static StopResult stop(Path serversDir, Path worldDir) throws IOException {
+        Path dir = serverDir(serversDir, worldDir);
+        Optional<ProcessHandle> process = process(dir);
+        if (process.isEmpty()) {
+            return StopResult.NOT_RUNNING;
+        }
+        StopResult result = StopResult.STOPPED;
+        try {
+            Properties props = serverProperties(dir);
+            rcon(Integer.parseInt(props.getProperty("rcon.port")), props.getProperty("rcon.password"), "stop");
+        } catch (IOException | RuntimeException e) {
+            result = StopResult.TERMINATED;
+            process.get().destroy();
+        }
+        try {
+            process.get().onExit().get(60, TimeUnit.SECONDS);
+        } catch (Exception e) {
+            result = StopResult.TERMINATED;
+            process.get().destroyForcibly();
+        }
+        Files.deleteIfExists(dir.resolve(PID_FILE));
+        return result;
+    }
+
+    /** Minimal RCON client: log in, run one command. */
+    static void rcon(int port, String password, String command) throws IOException {
+        try (Socket socket = new Socket(InetAddress.getLoopbackAddress(), port)) {
+            socket.setSoTimeout((int) Duration.ofSeconds(10).toMillis());
+            OutputStream out = socket.getOutputStream();
+            DataInputStream in = new DataInputStream(socket.getInputStream());
+            out.write(rconPacket(1, 3, password));
+            if (readRconId(in) != 1) {
+                throw new IOException("RCON login refused");
+            }
+            out.write(rconPacket(2, 2, command));
+            readRconId(in);
+        }
+    }
+
+    private static byte[] rconPacket(int id, int type, String body) {
+        byte[] payload = body.getBytes(StandardCharsets.UTF_8);
+        return ByteBuffer.allocate(4 + 4 + 4 + payload.length + 2).order(ByteOrder.LITTLE_ENDIAN)
+                .putInt(4 + 4 + payload.length + 2).putInt(id).putInt(type).put(payload).put((byte) 0).put((byte) 0)
+                .array();
+    }
+
+    private static int readRconId(DataInputStream in) throws IOException {
+        byte[] header = new byte[8];
+        in.readFully(header);
+        ByteBuffer buffer = ByteBuffer.wrap(header).order(ByteOrder.LITTLE_ENDIAN);
+        int length = buffer.getInt();
+        int id = buffer.getInt();
+        in.readFully(new byte[length - 4]);
+        return id;
+    }
+
     private static int freePort() throws IOException {
         try (ServerSocket socket = new ServerSocket(0)) {
             return socket.getLocalPort();
@@ -295,23 +411,38 @@ public final class Handoff {
     }
 
     /**
-     * Command-line entry point, for tests: {@code --world --mods --config --servers --minecraft
-     * --loader --host uuid:name [--players uuid:name,...] [--java] [--xmx]}. Prints the server
-     * folder once the server has been started.
+     * Command-line entry point, for tests. {@code --action start} (the default) takes {@code
+     * --world --mods --config --servers --minecraft --loader --host uuid:name [--players
+     * uuid:name,...] [--java] [--xmx]} and prints the server folder once it has started;
+     * {@code --action status|stop} take {@code --world --servers}.
      */
     public static void main(String[] args) throws Exception {
         Properties options = new Properties();
         for (int i = 0; i + 1 < args.length; i += 2) {
             options.setProperty(args[i].replaceFirst("^--", ""), args[i + 1]);
         }
+        Path world = Path.of(options.getProperty("world"));
+        Path servers = Path.of(options.getProperty("servers"));
+        switch (options.getProperty("action", "start")) {
+            case "status" -> {
+                System.out.println(isRunning(servers, world) ? "running" : "stopped");
+                return;
+            }
+            case "stop" -> {
+                System.out.println(stop(servers, world).name().toLowerCase());
+                return;
+            }
+            case "start" -> {}
+            default -> throw new IllegalArgumentException("unknown --action");
+        }
         Path java = options.containsKey("java")
                 ? Path.of(options.getProperty("java"))
                 : ProcessHandle.current().info().command().map(Path::of).orElseThrow();
         Path dir = start(new Spec(
-                Path.of(options.getProperty("world")),
+                world,
                 Path.of(options.getProperty("mods")),
                 Path.of(options.getProperty("config")),
-                Path.of(options.getProperty("servers")),
+                servers,
                 options.getProperty("minecraft"),
                 options.getProperty("loader"),
                 java,
