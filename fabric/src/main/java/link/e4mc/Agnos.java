@@ -14,6 +14,15 @@ public class Agnos {
         return FabricLoader.getInstance().getConfigDir();
     }
 
+    public static Path gameDir() {
+        return FabricLoader.getInstance().getGameDir();
+    }
+
+    /** The version of a loaded mod, e.g. "minecraft" or "fabricloader". */
+    public static String modVersion(String modId) {
+        return FabricLoader.getInstance().getModContainer(modId).orElseThrow().getMetadata().getVersion().getFriendlyString();
+    }
+
     public static Path jarPath() {
         return FabricLoader.getInstance().getModContainer(E4mcClient.MOD_ID).get().getOrigin().getPaths().get(0);
     }

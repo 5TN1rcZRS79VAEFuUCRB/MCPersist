@@ -13,6 +13,7 @@ a local relay (needs openssl and keytool on PATH).
 import json
 import os
 import queue
+import re
 import shutil
 import socket
 import subprocess
@@ -20,6 +21,7 @@ import sys
 import tempfile
 import threading
 import time
+import zipfile
 import urllib.parse
 import urllib.request
 from pathlib import Path
@@ -46,8 +48,13 @@ def free_port():
         return probe.getsockname()[1]
 
 
+GSON_JAR = "https://repo1.maven.org/maven2/com/google/code/gson/gson/2.11.0/gson-2.11.0.jar"
+
+
 def download_server(cache, mod_jar):
     loader = get_json(f"{FABRIC_META}/loader/{MINECRAFT_VERSION}")[0]["loader"]["version"]
+    (cache / "loader.txt").write_text(loader)
+    download(GSON_JAR, cache / "gson.jar")
     installer = get_json(f"{FABRIC_META}/installer")[0]["version"]
     download(f"{FABRIC_META}/loader/{MINECRAFT_VERSION}/{loader}/{installer}/server/jar", cache / "server.jar")
     query = urllib.parse.urlencode({"game_versions": f'["{MINECRAFT_VERSION}"]', "loaders": '["fabric"]'})
@@ -236,6 +243,131 @@ def test_stable_address(cache, relay_bin):
     print(f"PASS: persistent world kept {first} across restarts; with persistence off it got {third}")
 
 
+def process_alive(pid):
+    if os.name == "nt":
+        out = subprocess.run(["tasklist", "/FI", f"PID eq {pid}", "/NH"], capture_output=True, text=True).stdout
+        return str(pid) in out
+    try:
+        os.kill(pid, 0)
+        return True
+    except OSError:
+        return False
+
+
+def stop_process(pid):
+    if os.name == "nt":
+        subprocess.run(["taskkill", "/F", "/PID", str(pid)], capture_output=True)
+    else:
+        os.kill(pid, 15)
+    deadline = time.monotonic() + 60
+    while process_alive(pid) and time.monotonic() < deadline:
+        time.sleep(1)
+
+
+def wait_in_file(path, text, timeout):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if path.exists():
+            content = path.read_text(encoding="utf-8", errors="replace")
+            for line in content.splitlines():
+                if text in line:
+                    return line
+        time.sleep(1)
+    if path.exists():
+        sys.stdout.write(path.read_text(encoding="utf-8", errors="replace")[-8000:])
+    fail(f"never saw {text!r} in {path}")
+
+
+def hand_off(cache, game, world, servers):
+    """Runs the handoff entry point as the mod would, without a game window."""
+    classpath = os.pathsep.join([str(cache / "mod.jar"), str(cache / "gson.jar")])
+    return subprocess.run(
+        [os.environ.get("JAVA", "java"), "-cp", classpath, "link.e4mc.handoff.Handoff",
+         "--world", str(world), "--mods", str(game / "mods"), "--config", str(game / "config"),
+         "--servers", str(servers), "--minecraft", MINECRAFT_VERSION,
+         "--loader", (cache / "loader.txt").read_text(), "--xmx", "768M"],
+        capture_output=True, text=True,
+    )
+
+
+def test_handoff(cache, relay_bin):
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        relay = None
+        if relay_bin:
+            relay, jvm_args, mod_config = start_relay(relay_bin, root)
+            # The handoff runs the server with the game's JVM settings, not the test's, so
+            # trust the relay's certificate through the JVM's environment instead.
+            os.environ["JAVA_TOOL_OPTIONS"] = " ".join(jvm_args)
+        else:
+            mod_config = "hostEnabled = false\n"
+        try:
+            game = root / "game"
+            world = game / "saves" / "Handoff World"
+            world.mkdir(parents=True)
+            (world / "mcpersist.properties").write_text("persistent=true\nkey=smoke-test-handoff-key-0123456789\n")
+            (game / "mods").mkdir()
+            shutil.copy(cache / "mod.jar", game / "mods" / "mcpersist.jar")
+            shutil.copy(cache / "fabric-api.jar", game / "mods")
+            with zipfile.ZipFile(game / "mods" / "client-only.jar", "w") as jar:
+                jar.writestr("fabric.mod.json", json.dumps(
+                    {"schemaVersion": 1, "id": "clientonly", "version": "1", "environment": "client"}))
+            (game / "config" / "mcpersist").mkdir(parents=True)
+            (game / "config" / "mcpersist" / "mcpersist.toml").write_text(mod_config)
+            servers = game / "mcpersist" / "servers"
+
+            domains = []
+            for attempt in range(2 if relay else 1):
+                result = hand_off(cache, game, world, servers)
+                if result.returncode != 0:
+                    fail(f"handoff failed: {result.stderr}")
+                server_dir = Path(result.stdout.strip().splitlines()[-1])
+                if server_dir != servers / world.name:
+                    fail(f"unexpected server folder {server_dir}")
+                pid = int((server_dir / "mcpersist.pid").read_text())
+                console = server_dir / "logs" / "mcpersist-console.log"
+                try:
+                    wait_in_file(console, "Done (", timeout=300)
+                    if not process_alive(pid):
+                        fail("server did not outlive the handoff process")
+                    if relay:
+                        domains.append(wait_in_file(console, "Domain assigned: ", timeout=60).split("Domain assigned: ", 1)[1].strip())
+                    if attempt == 0:
+                        check_server_folder(server_dir, world)
+                        second = hand_off(cache, game, world, servers)
+                        if second.returncode == 0 or "open in another game or server" not in second.stderr:
+                            fail(f"second handoff while the server runs was not refused: {second.stderr}")
+                finally:
+                    stop_process(pid)
+            if relay and domains[0] != domains[1]:
+                fail(f"handed-off world changed address: {domains}")
+        finally:
+            os.environ.pop("JAVA_TOOL_OPTIONS", None)
+            if relay:
+                relay.kill()
+    print("PASS: handoff ran the world in place in a detached server"
+          + (f" at {domains[0]} both times" if relay else ""))
+
+
+def check_server_folder(server_dir, world):
+    mods = sorted(p.name for p in (server_dir / "mods").glob("*.jar"))
+    if "client-only.jar" in mods or "mcpersist.jar" not in mods or "fabric-api.jar" not in mods:
+        fail(f"wrong server mods: {mods}")
+    props = {}
+    for line in (server_dir / "server.properties").read_text().splitlines():
+        if "=" in line and not line.startswith("#"):
+            key, value = line.split("=", 1)
+            props[key] = re.sub(r"\\(.)", r"\1", value)  # undo java.util.Properties escaping
+    expected_level = str(world.absolute()).replace(os.sep, "/")
+    if props.get("level-name") != expected_level or props.get("accepts-transfers") != "true":
+        fail(f"wrong server.properties: {props}")
+    launch = (server_dir / "mcpersist-launch.txt").read_text().splitlines()
+    if "-Xmx768M" not in launch:
+        fail(f"server not launched with the game's -Xmx: {launch}")
+    if not (world / "level.dat").exists():
+        fail("the server did not run the world in place")
+
+
 def main():
     mod_jar = Path(sys.argv[1]).resolve()
     with tempfile.TemporaryDirectory() as tmp:
@@ -247,6 +379,7 @@ def main():
             test_stable_address(cache, relay_bin)
         else:
             print("SKIP: stable-address check (set MCPERSIST_RELAY to an mcpersist-relay binary)")
+        test_handoff(cache, relay_bin)
 
 
 if __name__ == "__main__":

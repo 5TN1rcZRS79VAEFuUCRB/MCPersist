@@ -7,10 +7,11 @@
     "BanListCommandsMixin",
     "BanPlayerCommandsMixin",
     "ConnectionMixin",
+    "MinecraftServerMixin",
     "PardonCommandMixin",
-    "ServerboundKeyPacketMixin",
     "ServerConnectionListenerMixin",
     "ServerLoginPacketListenerImplMixin",
+    "ServerboundKeyPacketMixin",
     "WhitelistCommandMixin"
   ],
   "injectors": {
