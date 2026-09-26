@@ -249,6 +249,37 @@ public class Mirror {
         throw new RuntimeException("Could not locate any way to call isSingleplayerOwner!");
     }
 
+    private static final String[] HAS_PERMISSION_LEVEL_METHOD_NAMES = {
+            "hasPermission",
+            "method_9259",
+            "m_6761_"
+    };
+
+    /**
+     * Whether a command source has owner-level (4) permission. hasPermission(int) was
+     * removed in 1.21.11 in favour of permission sets; calling it directly crashes
+     * dedicated servers on those versions (e4mc#228).
+     */
+    public static boolean hasOwnerPermission(CommandSourceStack src) {
+        Class<?> clazz = src.getClass();
+        for (String methodName : HAS_PERMISSION_LEVEL_METHOD_NAMES) {
+            try {
+                Method method = clazz.getMethod(methodName, int.class);
+                return (boolean) method.invoke(src, 4);
+            } catch (NoSuchMethodException | IllegalAccessException | InvocationTargetException ignored) {}
+        }
+        // 1.21.11+: src.permissions().hasPermission(Permissions.COMMANDS_OWNER). These are
+        // looked up by their unobfuscated names, so this path covers 26.x.
+        try {
+            Class<?> permission = Class.forName("net.minecraft.server.permissions.Permission");
+            Object owner = Class.forName("net.minecraft.server.permissions.Permissions").getField("COMMANDS_OWNER").get(null);
+            Object permissions = clazz.getMethod("permissions").invoke(src);
+            return (boolean) permissions.getClass().getMethod("hasPermission", permission).invoke(permissions, owner);
+        } catch (ReflectiveOperationException | ClassCastException ignored) {}
+        // Unknown version: deny rather than crash the server tick loop.
+        return false;
+    }
+
     public static boolean isSingleplayerOwnerObj(MinecraftServer server, Object maybeProfile) {
         Class<MinecraftServer> clazz2 = MinecraftServer.class;
         for (String methodName : IS_SINGLEPLAYER_OWNER_METHOD_NAMES) {

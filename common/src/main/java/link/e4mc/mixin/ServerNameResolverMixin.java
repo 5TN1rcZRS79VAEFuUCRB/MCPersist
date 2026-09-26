@@ -51,6 +51,7 @@ public class ServerNameResolverMixin {
                                     var resolverAddr = str.substring(23);
                                     if (!serverAddress.getHost().endsWith(resolverAddr)) {
                                         E4mcClient.LOGGER.warn("Ignoring resolver addr {} as it's not a suffix of the target address", resolverAddr);
+                                        continue;
                                     }
                                     var httpClient = HttpClient.newHttpClient();
                                     var request = HttpRequest
