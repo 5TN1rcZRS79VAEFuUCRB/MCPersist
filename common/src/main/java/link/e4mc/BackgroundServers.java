@@ -6,12 +6,16 @@ import net.minecraft.client.User;
 import net.minecraft.client.gui.screens.AlertScreen;
 import net.minecraft.client.gui.screens.ConfirmScreen;
 import net.minecraft.client.gui.screens.ConnectScreen;
+import net.minecraft.client.gui.screens.GenericMessageScreen;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.network.chat.Component;
 import net.minecraft.client.multiplayer.ServerData;
 import net.minecraft.client.multiplayer.resolver.ServerAddress;
 
 import java.io.IOException;
+import java.net.InetAddress;
+import java.net.InetSocketAddress;
+import java.net.Socket;
 import java.nio.file.Path;
 import java.util.List;
 
@@ -34,13 +38,46 @@ public final class BackgroundServers {
     /** The server entry of the background server last joined from the world list. */
     public static volatile ServerData joined;
 
-    /** Joins the world's background server instead of opening it in singleplayer. */
+    /**
+     * Joins the world's background server instead of opening it in singleplayer, first waiting
+     * for it to accept players: right after a handoff it's running but still starting.
+     */
     public static void join(Screen parent, String levelId, String worldName) throws IOException {
         int port = Handoff.localPort(serversDir(), worldDir(levelId));
-        String address = "127.0.0.1:" + port;
         Minecraft minecraft = Minecraft.getInstance();
-        joined = new ServerData(worldName, address, ServerData.Type.OTHER);
-        ConnectScreen.startConnecting(parent, minecraft, new ServerAddress("127.0.0.1", port), joined, false, null);
+        ServerData server = new ServerData(worldName, "127.0.0.1:" + port, ServerData.Type.OTHER);
+        minecraft.gui.setScreen(new GenericMessageScreen(Component.translatable("selectWorld.mcpersist.waitingForBackground")));
+        new Thread(() -> {
+            boolean up = waitForPort(port, 60_000);
+            minecraft.execute(() -> {
+                if (up) {
+                    joined = server;
+                    ConnectScreen.startConnecting(parent, minecraft, new ServerAddress("127.0.0.1", port), server, false, null);
+                } else {
+                    minecraft.gui.setScreen(new AlertScreen(() -> minecraft.gui.setScreen(parent),
+                            Component.translatable("selectWorld.mcpersist.backgroundNotStarting"),
+                            Component.translatable("selectWorld.mcpersist.backgroundNotStarting.message")));
+                }
+            });
+        }, "MCPersist background join").start();
+    }
+
+    private static boolean waitForPort(int port, long timeoutMillis) {
+        long deadline = System.currentTimeMillis() + timeoutMillis;
+        while (System.currentTimeMillis() < deadline) {
+            try (Socket socket = new Socket()) {
+                socket.connect(new InetSocketAddress(InetAddress.getLoopbackAddress(), port), 1000);
+                return true;
+            } catch (IOException notYet) {
+                try {
+                    Thread.sleep(500);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    return false;
+                }
+            }
+        }
+        return false;
     }
 
     /** Stops the world's background server off the render thread, then runs {@code then} on it. */
