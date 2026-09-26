@@ -5,6 +5,7 @@ import io.netty.channel.EventLoopGroup;
 import link.e4mc.Config;
 import link.e4mc.E4mcClient;
 import link.e4mc.QuiclimeSession;
+import link.e4mc.SessionPlayers;
 import link.e4mc.WorldPersistence;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.network.ServerConnectionListener;
@@ -45,15 +46,40 @@ public abstract class ServerConnectionListenerMixin {
 
     @Inject(method = "startTcpServerListener", at = @At(value = "TAIL"))
     private void interceptGroup(InetAddress inetAddress, int i, CallbackInfo ci) {
+        // On an integrated server this is the host opening the world to LAN.
+        ((SessionPlayers) server).mcpersist$markShared();
         if (Config.INSTANCE.hostEnabled.value()) {
             String worldKey = WorldPersistence.keyFor(server.getWorldPath(LevelResource.ROOT));
-            E4mcClient.session = new QuiclimeSession(e4mc$childHandler, e4mc$group, worldKey);
+            QuiclimeSession session = new QuiclimeSession(e4mc$childHandler, e4mc$group, worldKey);
+            E4mcClient.session = session;
             e4mc$childHandler = null;
             e4mc$group = null;
-            E4mcClient.session.startAsync();
+            if (server.isDedicatedServer()) {
+                // A dedicated server listens before it's up, and drops logins until its first
+                // tick; players the relay is holding for it would be handed over too early.
+                new Thread(() -> {
+                    awaitFirstTick(server);
+                    session.startAsync();
+                }, "MCPersist relay wait").start();
+            } else {
+                session.startAsync();
+            }
         } else {
             e4mc$childHandler = null;
             e4mc$group = null;
+        }
+    }
+
+    @Unique
+    private static void awaitFirstTick(MinecraftServer server) {
+        long deadline = System.currentTimeMillis() + 300_000;
+        while (server.getStatus() == null && System.currentTimeMillis() < deadline) {
+            try {
+                Thread.sleep(100);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return;
+            }
         }
     }
 

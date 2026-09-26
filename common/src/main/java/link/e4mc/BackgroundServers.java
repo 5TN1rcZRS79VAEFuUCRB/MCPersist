@@ -12,7 +12,9 @@ import net.minecraft.network.chat.Component;
 import net.minecraft.client.multiplayer.ServerData;
 import net.minecraft.client.multiplayer.resolver.ServerAddress;
 
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.Socket;
@@ -48,7 +50,7 @@ public final class BackgroundServers {
         ServerData server = new ServerData(worldName, "127.0.0.1:" + port, ServerData.Type.OTHER);
         minecraft.gui.setScreen(new GenericMessageScreen(Component.translatable("selectWorld.mcpersist.waitingForBackground")));
         new Thread(() -> {
-            boolean up = waitForPort(port, 60_000);
+            boolean up = waitForStatus(port, 60_000);
             minecraft.execute(() -> {
                 if (up) {
                     joined = server;
@@ -62,12 +64,43 @@ public final class BackgroundServers {
         }, "MCPersist background join").start();
     }
 
-    private static boolean waitForPort(int port, long timeoutMillis) {
+    /**
+     * The port opens before the server is up, and logins are dropped until its first tick;
+     * a server-list ping is only answered from then on.
+     */
+    private static void writeVarInt(ByteArrayOutputStream out, int value) {
+        while ((value & ~0x7F) != 0) {
+            out.write((value & 0x7F) | 0x80);
+            value >>>= 7;
+        }
+        out.write(value);
+    }
+
+    private static boolean waitForStatus(int port, long timeoutMillis) {
         long deadline = System.currentTimeMillis() + timeoutMillis;
         while (System.currentTimeMillis() < deadline) {
             try (Socket socket = new Socket()) {
                 socket.connect(new InetSocketAddress(InetAddress.getLoopbackAddress(), port), 1000);
-                return true;
+                socket.setSoTimeout(2000);
+                byte[] host = "127.0.0.1".getBytes(StandardCharsets.UTF_8);
+                ByteArrayOutputStream handshake = new ByteArrayOutputStream();
+                writeVarInt(handshake, 0);
+                writeVarInt(handshake, -1);
+                writeVarInt(handshake, host.length);
+                handshake.write(host);
+                handshake.write(port >> 8);
+                handshake.write(port);
+                writeVarInt(handshake, 1);
+                ByteArrayOutputStream out = new ByteArrayOutputStream();
+                writeVarInt(out, handshake.size());
+                handshake.writeTo(out);
+                out.write(new byte[]{1, 0});
+                socket.getOutputStream().write(out.toByteArray());
+                byte[] reply = socket.getInputStream().readNBytes(64);
+                if (new String(reply, StandardCharsets.UTF_8).contains("{")) {
+                    return true;
+                }
+                throw new IOException("not answering pings yet");
             } catch (IOException notYet) {
                 try {
                     Thread.sleep(500);

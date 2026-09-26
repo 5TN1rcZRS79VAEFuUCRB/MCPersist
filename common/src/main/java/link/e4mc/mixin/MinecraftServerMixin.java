@@ -45,13 +45,20 @@ public abstract class MinecraftServerMixin implements SessionPlayers {
     @Unique
     private boolean mcpersist$crashed;
 
-    /** Marks the session open, so a session that dies without a handoff is noticed next launch. */
-    @Inject(method = "runServer", at = @At("HEAD"))
-    private void mcpersist$markSessionOpen(CallbackInfo ci) {
+    @Unique
+    private volatile boolean mcpersist$shared;
+
+    /**
+     * Also marks the session open, so a shared session that dies without a handoff is noticed
+     * next launch. A world played alone just closes, like any other.
+     */
+    @Override
+    public void mcpersist$markShared() {
         Path worldDir = getWorldPath(LevelResource.ROOT).toAbsolutePath().normalize();
-        if (isDedicatedServer() || !WorldPersistence.isPersistent(worldDir)) {
+        if (isDedicatedServer() || mcpersist$shared || !WorldPersistence.isPersistent(worldDir)) {
             return;
         }
+        mcpersist$shared = true;
         try {
             Handoff.markSessionOpen(LocalHandoff.serversDir(), worldDir);
         } catch (IOException e) {
@@ -84,7 +91,7 @@ public abstract class MinecraftServerMixin implements SessionPlayers {
             E4mcClient.LOGGER.error("Failed to mark {} closed", worldDir, e);
         }
         GameProfile owner = getSingleplayerProfile();
-        if (owner == null || !WorldPersistence.isPersistent(worldDir)) {
+        if (!mcpersist$shared || owner == null || !WorldPersistence.isPersistent(worldDir)) {
             return;
         }
         NameAndId host = new NameAndId(owner);
