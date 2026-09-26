@@ -21,6 +21,7 @@
     "ClientHandshakePacketListenerImplMixin",
     "EditWorldScreenMixin",
     "IntegratedServerMixin",
+    "LevelSummaryMixin",
     "PlayerListMixin",
     "SelectWorldScreenMixin",
     "ServerAddressMixin",

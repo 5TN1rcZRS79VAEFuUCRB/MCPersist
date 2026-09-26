@@ -16,6 +16,7 @@
     "selectWorld.mcpersist.resetAddress.message": "Anyone using the old address won't be able to join any more. Share the new one with your friends after opening the world.",
     "text.mcpersist.movingToBackground": "This world is moving to a background server. Rejoin in a moment.",
     "selectWorld.mcpersist.stopBackgroundServer": "Stop Background Server",
+    "selectWorld.mcpersist.runningInBackground": "Running in the background. Click to join",
     "mcpersist.problem.failed.title": "The background server for %s stopped unexpectedly",
     "mcpersist.problem.failed.message": "It won't be restarted automatically, and your world files weren't changed by the failure. Details: %s",
     "mcpersist.problem.interrupted.title": "%s closed without moving to the background",
