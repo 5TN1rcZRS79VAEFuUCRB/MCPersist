@@ -5,8 +5,13 @@ import io.netty.channel.EventLoopGroup;
 import link.e4mc.Config;
 import link.e4mc.E4mcClient;
 import link.e4mc.QuiclimeSession;
+import link.e4mc.WorldPersistence;
+import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.network.ServerConnectionListener;
+import net.minecraft.world.level.storage.LevelResource;
+import org.spongepowered.asm.mixin.Final;
 import org.spongepowered.asm.mixin.Mixin;
+import org.spongepowered.asm.mixin.Shadow;
 import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
@@ -17,6 +22,10 @@ import java.net.InetAddress;
 
 @Mixin(ServerConnectionListener.class)
 public abstract class ServerConnectionListenerMixin {
+    @Shadow
+    @Final
+    private MinecraftServer server;
+
     @Unique
     private ChannelHandler e4mc$childHandler;
     @Unique
@@ -37,7 +46,8 @@ public abstract class ServerConnectionListenerMixin {
     @Inject(method = "startTcpServerListener", at = @At(value = "TAIL"))
     private void interceptGroup(InetAddress inetAddress, int i, CallbackInfo ci) {
         if (Config.INSTANCE.hostEnabled.value()) {
-            E4mcClient.session = new QuiclimeSession(e4mc$childHandler, e4mc$group);
+            String worldKey = WorldPersistence.keyFor(server.getWorldPath(LevelResource.ROOT));
+            E4mcClient.session = new QuiclimeSession(e4mc$childHandler, e4mc$group, worldKey);
             e4mc$childHandler = null;
             e4mc$group = null;
             E4mcClient.session.startAsync();

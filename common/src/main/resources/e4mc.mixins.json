@@ -18,8 +18,10 @@
   },
   "client": [
     "ClientHandshakePacketListenerImplMixin",
+    "EditWorldScreenMixin",
     "PlayerListMixin",
     "ServerAddressMixin",
-    "ServerNameResolverMixin"
+    "ServerNameResolverMixin",
+    "WorldOptionsScreenMixin"
   ]
 }

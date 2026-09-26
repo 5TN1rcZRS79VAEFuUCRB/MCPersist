@@ -57,7 +57,12 @@ public class QuiclimeSession {
 
         public static class RequestDomainAssignmentMessageServerbound implements ControlMessage {
             String kind = "request_domain_assignment";
-            public RequestDomainAssignmentMessageServerbound() {}
+            // A persistent world's key; the relay gives it the same domain every time.
+            // Null (omitted from the JSON) for a random domain, as in e4mc.
+            String key;
+            public RequestDomainAssignmentMessageServerbound(String key) {
+                this.key = key;
+            }
         }
 
         public static class DialtoneRegisterTicketMessageServerbound implements ControlMessage {
@@ -73,6 +78,14 @@ public class QuiclimeSession {
             String domain;
             public DomainAssignmentCompleteMessageClientbound(String domain) {
                 this.domain = domain;
+            }
+        }
+
+        public static class DomainAssignmentFailedMessageClientbound implements ControlMessage {
+            String kind = "domain_assignment_failed";
+            String reason;
+            public DomainAssignmentFailedMessageClientbound(String reason) {
+                this.reason = reason;
             }
         }
 
@@ -129,6 +142,9 @@ public class QuiclimeSession {
                     case "domain_assignment_complete":
                         out.add(gson.fromJson(json, DomainAssignmentCompleteMessageClientbound.class));
                         break;
+                    case "domain_assignment_failed":
+                        out.add(gson.fromJson(json, DomainAssignmentFailedMessageClientbound.class));
+                        break;
                     case "request_message_broadcast":
                         out.add(gson.fromJson(json, RequestMessageBroadcastMessageClientbound.class));
                         break;
@@ -169,10 +185,13 @@ public class QuiclimeSession {
     private QuicChannel quicChannel;
 
     private DialtoneServerChannel dialtoneChannel;
+    final String worldKey;
 
-    public QuiclimeSession(ChannelHandler handler, EventLoopGroup group) {
+    /** {@code worldKey} is the world's key if it's persistent, else null. */
+    public QuiclimeSession(ChannelHandler handler, EventLoopGroup group, String worldKey) {
         this.handler = handler;
         this.group = group;
+        this.worldKey = worldKey;
     }
 
     public void startAsync() {
@@ -296,7 +315,15 @@ public class QuiclimeSession {
                             ch.pipeline().addLast(new ControlMessageCodec(), new SimpleChannelInboundHandler<ControlMessageCodec.ControlMessage>() {
                                 @Override
                                 protected void channelRead0(ChannelHandlerContext ctx, ControlMessageCodec.ControlMessage msg) {
-                                    if (msg instanceof ControlMessageCodec.DomainAssignmentCompleteMessageClientbound) {
+                                    if (msg instanceof ControlMessageCodec.DomainAssignmentFailedMessageClientbound failed) {
+                                        LOGGER.error("Relay refused this world's address: {}", failed.reason);
+                                        if (Agnos.isClient()) {
+                                            Mirror.addMessage(Mirror.translatable("name_in_use".equals(failed.reason)
+                                                    ? "text.mcpersist.addressInUse"
+                                                    : "text.mcpersist.addressRefused"));
+                                        }
+                                        state = State.UNHEALTHY;
+                                    } else if (msg instanceof ControlMessageCodec.DomainAssignmentCompleteMessageClientbound) {
                                         state = State.STARTED;
                                         if (!Agnos.isClient()) {
                                             LOGGER.warn("e4mc running on Dedicated Server; This works, but isn't recommended as e4mc is designed for short-lived LAN servers");
@@ -387,7 +414,7 @@ public class QuiclimeSession {
                                 .writeAndFlush(new ControlMessageCodec.ProbeCapabilitiesMessageServerbound())
                                 .addListener(ignored -> LOGGER.info("probing capabilities"));
                         streamChannel
-                                .writeAndFlush(new ControlMessageCodec.RequestDomainAssignmentMessageServerbound())
+                                .writeAndFlush(new ControlMessageCodec.RequestDomainAssignmentMessageServerbound(worldKey))
                                 .addListener(ignored -> LOGGER.info("control channel write complete"));
                         quicChannel.closeFuture().addListener(ignored -> datagramChannel.close());
                     });

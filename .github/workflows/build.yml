@@ -38,5 +38,10 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.x"
+      # The stable-address scenario runs against a local relay, on Linux only.
+      - if: runner.os == 'Linux'
+        run: |
+          cargo install --locked --git https://github.com/5TN1rcZRS79VAEFuUCRB/mcpersist-relay
+          echo "MCPERSIST_RELAY=$HOME/.cargo/bin/mcpersist-relay" >> "$GITHUB_ENV"
       - shell: bash
         run: python -u test/smoke.py jar/mcpersist-fabric-*.jar
