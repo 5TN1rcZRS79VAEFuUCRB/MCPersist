@@ -18,11 +18,13 @@ import queue
 import re
 import shutil
 import socket
+import struct
 import subprocess
 import sys
 import tempfile
 import threading
 import time
+import uuid
 import zipfile
 import urllib.parse
 import urllib.request
@@ -185,6 +187,7 @@ def start_relay(relay_bin, root):
         check=True, capture_output=True,
     )
     quic_port = free_port()
+    mc_port = free_port()
     env = dict(
         os.environ,
         QUICLIME_CERT_PATH=str(root / "cert.pem"),
@@ -193,7 +196,7 @@ def start_relay(relay_bin, root):
         QUICLIME_DB_PATH=str(root / "names.sqlite"),
         QUICLIME_BIND_ADDR_QUIC=f"127.0.0.1:{quic_port}",
         QUICLIME_BIND_ADDR_WEB=f"127.0.0.1:{free_port()}",
-        QUICLIME_BIND_ADDR_MC=f"127.0.0.1:{free_port()}",
+        QUICLIME_BIND_ADDR_MC=f"127.0.0.1:{mc_port}",
         RUST_LOG="info",
     )
     relay = subprocess.Popen([relay_bin], env=env)
@@ -204,7 +207,7 @@ def start_relay(relay_bin, root):
         f"relayPort = {quic_port}\n"
         "dialtoneHostEnabled = false\n"
     )
-    return relay, jvm_args, mod_config
+    return relay, jvm_args, mod_config, mc_port
 
 
 def run_for_domain(root, jvm_args):
@@ -220,7 +223,7 @@ def run_for_domain(root, jvm_args):
 def test_stable_address(cache, relay_bin):
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
-        relay, jvm_args, mod_config = start_relay(relay_bin, root)
+        relay, jvm_args, mod_config, _ = start_relay(relay_bin, root)
         try:
             server_root = root / "server"
             server_root.mkdir()
@@ -243,6 +246,56 @@ def test_stable_address(cache, relay_bin):
         finally:
             relay.kill()
     print(f"PASS: persistent world kept {first} across restarts; with persistence off it got {third}")
+
+
+def varint(n):
+    out = b""
+    while True:
+        byte, n = n & 0x7F, n >> 7
+        out += bytes([byte | (0x80 if n else 0)])
+        if not n:
+            return out
+
+
+def packet(packet_id, body):
+    data = varint(packet_id) + body
+    return varint(len(data)) + data
+
+
+def test_relayed_leave(cache, relay_bin):
+    """A player who joins through the relay and leaves is dropped at once, not after the 30 s timeout."""
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        relay, jvm_args, mod_config, mc_port = start_relay(relay_bin, root)
+        try:
+            server_root = root / "server"
+            server_root.mkdir()
+            prepare_server(server_root, cache, mod_config)
+            # The scripted player isn't whitelisted.
+            with open(server_root / "server.properties", "a") as properties:
+                properties.write("white-list=false\n")
+            server = Server(server_root, jvm_args)
+            domain = server.wait_for("Domain assigned: ", timeout=300).split("Domain assigned: ", 1)[1].strip()
+            if not any("Done (" in logged for logged in server.log):
+                server.wait_for("Done (", timeout=300)
+            host = domain.encode()
+            with socket.create_connection(("127.0.0.1", mc_port), timeout=15) as player:
+                # Handshake for 26.3 (protocol 777), then Login Start as an offline-mode player.
+                player.sendall(packet(0, varint(777) + varint(len(host)) + host + struct.pack(">H", 25565) + varint(2)))
+                player.sendall(packet(0, varint(6) + b"Leaver" + uuid.uuid4().bytes))
+                if not player.recv(4096):
+                    fail("the server never answered a login through the relay", server)
+            left = time.monotonic()
+            line = server.wait_for("lost connection", timeout=45)
+            if "Leaver" not in line or "white-listed" in line or "Outdated" in line:
+                fail(f"the server refused the scripted player: {line.strip()}", server)
+            took = time.monotonic() - left
+            server.stop_cleanly()
+        finally:
+            relay.kill()
+    if took > 5:
+        fail(f"a player who left through the relay stayed for {took:.0f} s: {line.strip()}")
+    print(f"PASS: a player who left through the relay was dropped after {took:.1f} s")
 
 
 def process_alive(pid):
@@ -333,7 +386,7 @@ def test_handoff(cache, relay_bin):
         root = Path(tmp)
         relay = None
         if relay_bin:
-            relay, jvm_args, mod_config = start_relay(relay_bin, root)
+            relay, jvm_args, mod_config, _ = start_relay(relay_bin, root)
             # The handoff runs the server with the game's JVM settings, not the test's, so
             # trust the relay's certificate through the JVM's environment instead.
             os.environ["JAVA_TOOL_OPTIONS"] = " ".join(jvm_args)
@@ -518,6 +571,7 @@ def main():
         relay_bin = os.environ.get("MCPERSIST_RELAY")
         if relay_bin:
             test_stable_address(cache, relay_bin)
+            test_relayed_leave(cache, relay_bin)
         else:
             print("SKIP: stable-address check (set MCPERSIST_RELAY to an mcpersist-relay binary)")
         test_handoff(cache, relay_bin)
