@@ -23,8 +23,8 @@
     "e4mc.mixins.json"
   ],
   "depends": {
-    "fabric": "*",
-    "minecraft": ">=1.18"
+    "fabric-api": "*",
+    "minecraft": ">=26.3"
   },
   "breaks": {
     "e4mc": "*"

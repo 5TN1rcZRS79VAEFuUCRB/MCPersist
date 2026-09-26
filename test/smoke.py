@@ -1,6 +1,6 @@
 """Seam 1 smoke test: runs a real headless Fabric server with the mod and checks it from outside.
 
-Usage: python test/smoke.py <path to mcpersist-fabric-*-modern.jar>
+Usage: python test/smoke.py <path to mcpersist-fabric-*.jar>
 
 Needs Java for the target Minecraft version on PATH, or its path in $JAVA. Downloads the
 Fabric server launcher and Fabric API into a temporary directory. Accepts the Minecraft

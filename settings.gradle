@@ -1,17 +1,12 @@
 pluginManagement {
     repositories {
         maven { url "https://maven.fabricmc.net/" }
-        maven { url "https://maven.architectury.dev/" }
-        maven { url "https://maven.minecraftforge.net/" }
-        maven { url "https://maven.neoforged.net/releases/" }
         gradlePluginPortal()
     }
 }
 
-include("common")
+// Built for Fabric on Minecraft 26.x only. forge/ and neoforge/ keep e4mc's loader glue
+// for later; they are not part of the build.
 include("fabric")
-// Fabric only for now; the forge and neoforge projects are kept for later.
-// include("forge")
-// include("neoforge")
 
 rootProject.name = "mcpersist"
