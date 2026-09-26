@@ -20,6 +20,7 @@
   "client": [
     "ClientHandshakePacketListenerImplMixin",
     "EditWorldScreenMixin",
+    "IntegratedServerMixin",
     "PlayerListMixin",
     "SelectWorldScreenMixin",
     "ServerAddressMixin",
