@@ -15,5 +15,9 @@
     "selectWorld.mcpersist.resetAddress.title": "Give this world a new address?",
     "selectWorld.mcpersist.resetAddress.message": "Anyone using the old address won't be able to join any more. Share the new one with your friends after opening the world.",
     "text.mcpersist.movingToBackground": "This world is moving to a background server. Rejoin in a moment.",
-    "selectWorld.mcpersist.stopBackgroundServer": "Stop Background Server"
+    "selectWorld.mcpersist.stopBackgroundServer": "Stop Background Server",
+    "mcpersist.problem.failed.title": "The background server for %s stopped unexpectedly",
+    "mcpersist.problem.failed.message": "It won't be restarted automatically, and your world files weren't changed by the failure. Details: %s",
+    "mcpersist.problem.interrupted.title": "%s closed without moving to the background",
+    "mcpersist.problem.interrupted.message": "The game or the world stopped before the world could be handed to its background server. Start its background server now?"
 }

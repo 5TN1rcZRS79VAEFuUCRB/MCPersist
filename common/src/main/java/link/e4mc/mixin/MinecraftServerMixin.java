@@ -1,12 +1,13 @@
 package link.e4mc.mixin;
 
-import link.e4mc.Agnos;
+import link.e4mc.LocalHandoff;
 import com.mojang.authlib.GameProfile;
 import link.e4mc.E4mcClient;
 import link.e4mc.QuiclimeSession;
 import link.e4mc.SessionPlayers;
 import link.e4mc.WorldPersistence;
 import link.e4mc.handoff.Handoff;
+import net.minecraft.CrashReport;
 import net.minecraft.network.chat.Component;
 import net.minecraft.network.protocol.common.ClientboundTransferPacket;
 import net.minecraft.server.MinecraftServer;
@@ -21,7 +22,7 @@ import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
-import java.lang.management.ManagementFactory;
+import java.io.IOException;
 import java.nio.file.Path;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -75,48 +76,53 @@ public abstract class MinecraftServerMixin implements SessionPlayers {
         }
     }
 
+    @Unique
+    private boolean mcpersist$crashed;
+
+    /** Marks the session open, so a session that dies without a handoff is noticed next launch. */
+    @Inject(method = "runServer", at = @At("HEAD"))
+    private void mcpersist$markSessionOpen(CallbackInfo ci) {
+        Path worldDir = getWorldPath(LevelResource.ROOT).toAbsolutePath().normalize();
+        if (isDedicatedServer() || !WorldPersistence.isPersistent(worldDir)) {
+            return;
+        }
+        try {
+            Handoff.markSessionOpen(LocalHandoff.serversDir(), worldDir);
+        } catch (IOException e) {
+            E4mcClient.LOGGER.error("Failed to mark {} open", worldDir, e);
+        }
+    }
+
+    @Inject(method = "onServerCrash", at = @At("HEAD"))
+    private void mcpersist$noteCrash(CrashReport report, CallbackInfo ci) {
+        mcpersist$crashed = true;
+    }
+
     // At the end of stopServer the world is saved and its storage (and session.lock) closed.
+    // Runs synchronously: quitting or closing the game waits for the server to finish
+    // stopping, so the handoff completes before the game exits.
     @Inject(method = "stopServer", at = @At("TAIL"))
     private void mcpersist$handOff(CallbackInfo ci) {
         if (isDedicatedServer()) {
             return;
         }
         Path worldDir = getWorldPath(LevelResource.ROOT).toAbsolutePath().normalize();
+        // After a crash, don't hand the world off and keep the session marked open: the next
+        // launch offers to start the background server.
+        if (mcpersist$crashed) {
+            return;
+        }
+        try {
+            Handoff.clearSessionOpen(LocalHandoff.serversDir(), worldDir);
+        } catch (IOException e) {
+            E4mcClient.LOGGER.error("Failed to mark {} closed", worldDir, e);
+        }
         GameProfile owner = getSingleplayerProfile();
         if (owner == null || !WorldPersistence.isPersistent(worldDir)) {
             return;
         }
         NameAndId host = new NameAndId(owner);
-        Path gameDir = Agnos.gameDir();
-        Handoff.Spec spec = new Handoff.Spec(
-                worldDir,
-                gameDir.resolve("mods"),
-                Agnos.configDir(),
-                gameDir.resolve("mcpersist").resolve("servers"),
-                Agnos.modVersion("minecraft"),
-                Agnos.modVersion("fabricloader"),
-                ProcessHandle.current().info().command().map(Path::of).orElseThrow(),
-                maxHeap(),
-                new Handoff.Player(host.id(), host.name()),
+        LocalHandoff.start(worldDir, new Handoff.Player(host.id(), host.name()),
                 mcpersist$sessionPlayers.stream().map(p -> new Handoff.Player(p.id(), p.name())).toList());
-        // Not a daemon: if the game is closing, the handoff still finishes.
-        new Thread(() -> {
-            try {
-                Path dir = Handoff.start(spec);
-                E4mcClient.LOGGER.info("Handed {} to a background server in {}", worldDir, dir);
-            } catch (Exception e) {
-                E4mcClient.LOGGER.error("Failed to hand {} to a background server", worldDir, e);
-            }
-        }, "mcpersist-handoff").start();
-    }
-
-    /** The game's own -Xmx, so heavy modpacks get the memory they already need. */
-    private static String maxHeap() {
-        for (String arg : ManagementFactory.getRuntimeMXBean().getInputArguments()) {
-            if (arg.startsWith("-Xmx")) {
-                return arg.substring(4);
-            }
-        }
-        return Runtime.getRuntime().maxMemory() / (1024 * 1024) + "M";
     }
 }

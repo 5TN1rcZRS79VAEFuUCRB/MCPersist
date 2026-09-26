@@ -286,9 +286,10 @@ NIL_UUID = "00000000-0000-0000-0000-000000000000"
 
 def handoff_action(cache, world, servers, action):
     classpath = os.pathsep.join([str(cache / "mod.jar"), str(cache / "gson.jar")])
+    world_args = ["--world", str(world)] if world else []
     return subprocess.run(
         [os.environ.get("JAVA", "java"), "-cp", classpath, "link.e4mc.handoff.Handoff",
-         "--action", action, "--world", str(world), "--servers", str(servers)],
+         "--action", action, *world_args, "--servers", str(servers)],
         capture_output=True, text=True, timeout=180,
     ).stdout.strip()
 
@@ -363,6 +364,7 @@ def test_handoff(cache, relay_bin):
                         fail("status doesn't report the running server")
                     stopped = handoff_action(cache, world, servers, "stop")
                     if stopped != "stopped":
+                        sys.stdout.write(console.read_text(encoding="utf-8", errors="replace")[-6000:])
                         fail(f"server wasn't stopped by its own stop command: {stopped!r}")
                     if process_alive(pid):
                         fail("server still running after stop")
@@ -382,6 +384,48 @@ def test_handoff(cache, relay_bin):
                 relay.kill()
     print("PASS: handoff ran the world in place in a detached server, whitelisted, host as op, stopped cleanly"
           + (f" at {domains[0]} both times" if relay else ""))
+
+
+def test_failed_start(cache):
+    """A mod that crashes the background server: reported once, world untouched, no retry."""
+    with tempfile.TemporaryDirectory() as tmp:
+        game = Path(tmp) / "game"
+        world = game / "saves" / "Crashing World"
+        world.mkdir(parents=True)
+        (world / "mcpersist.properties").write_text("persistent=true\nkey=smoke-test-crash-key-0123456789\n")
+        (game / "mods").mkdir()
+        shutil.copy(cache / "mod.jar", game / "mods" / "mcpersist.jar")
+        shutil.copy(cache / "fabric-api.jar", game / "mods")
+        with zipfile.ZipFile(game / "mods" / "crashes.jar", "w") as jar:
+            jar.writestr("fabric.mod.json", json.dumps({
+                "schemaVersion": 1, "id": "crashes", "version": "1", "environment": "*",
+                "entrypoints": {"main": ["does.not.Exist"]}}))
+        (game / "config" / "mcpersist").mkdir(parents=True)
+        (game / "config" / "mcpersist" / "mcpersist.toml").write_text("hostEnabled = false\n")
+        servers = game / "mcpersist" / "servers"
+        world_files = sorted(p.name for p in world.iterdir())
+
+        result = hand_off(cache, game, world, servers)
+        if result.returncode != 0:
+            fail(f"handoff failed: {result.stderr}")
+        pid = int((servers / world.name / "mcpersist.pid").read_text())
+        deadline = time.monotonic() + 300
+        while process_alive(pid) and time.monotonic() < deadline:
+            time.sleep(1)
+        if process_alive(pid):
+            stop_process(pid)
+            fail("the crashing server kept running")
+
+        problems = handoff_action(cache, None, servers, "problems").splitlines()
+        if len(problems) != 1 or not problems[0].startswith("failed\t") or "mcpersist-console.log" not in problems[0]:
+            fail(f"failure not reported with its log: {problems}")
+        if handoff_action(cache, None, servers, "problems"):
+            fail("failure reported more than once")
+        if sorted(p.name for p in world.iterdir()) != world_files:
+            fail(f"failed start changed the world: {sorted(p.name for p in world.iterdir())}")
+        if handoff_action(cache, world, servers, "status") != "stopped":
+            fail("crashed server was restarted")
+    print("PASS: a background server that failed to start was reported once, didn't touch the world, and wasn't retried")
 
 
 def check_server_folder(server_dir, world):
@@ -425,6 +469,7 @@ def main():
         else:
             print("SKIP: stable-address check (set MCPERSIST_RELAY to an mcpersist-relay binary)")
         test_handoff(cache, relay_bin)
+        test_failed_start(cache)
 
 
 if __name__ == "__main__":

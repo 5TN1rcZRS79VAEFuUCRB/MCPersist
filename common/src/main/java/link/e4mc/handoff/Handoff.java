@@ -10,6 +10,7 @@ import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.DataInputStream;
 import java.io.OutputStream;
+import java.net.ConnectException;
 import java.net.InetAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
@@ -54,6 +55,9 @@ public final class Handoff {
     private static final String SERVER_JAR = "fabric-server-launch.jar";
     static final String LAUNCH_FILE = "mcpersist-launch.txt";
     static final String PID_FILE = "mcpersist.pid";
+    private static final String SESSION_MARKER = "mcpersist-session-open";
+    private static final String FAILURE_FILE = "mcpersist-failure.txt";
+    private static final String CONSOLE_LOG = "mcpersist-console.log";
     private static final Gson GSON = new Gson();
     private static final UUID NIL = new UUID(0, 0);
 
@@ -291,6 +295,111 @@ public final class Handoff {
         }
     }
 
+    /** Records that the host has the world open, so a session that dies can be noticed. */
+    public static void markSessionOpen(Path serversDir, Path worldDir) throws IOException {
+        Path dir = serverDir(serversDir, worldDir);
+        Files.createDirectories(dir);
+        Files.writeString(dir.resolve(SESSION_MARKER), worldDir.toAbsolutePath().toString());
+    }
+
+    public static void clearSessionOpen(Path serversDir, Path worldDir) throws IOException {
+        Files.deleteIfExists(serverDir(serversDir, worldDir).resolve(SESSION_MARKER));
+    }
+
+    /** Records a handoff that failed before its server could start, for the next launch. */
+    public static void recordFailure(Path serversDir, Path worldDir, Exception e) throws IOException {
+        Path dir = serverDir(serversDir, worldDir);
+        Files.createDirectories(dir);
+        Files.writeString(dir.resolve(FAILURE_FILE), worldDir.toAbsolutePath() + "\n" + e);
+    }
+
+    public record Problem(Kind kind, Path worldDir, Path log) {
+        public enum Kind {
+            /** The background server didn't start, or crashed. It is not restarted. */
+            FAILED,
+            /** The host's session ended without a handoff (the game or server crashed). */
+            INTERRUPTED
+        }
+    }
+
+    /**
+     * What went wrong with background servers since this was last called: servers that
+     * failed to start or crashed, and sessions that ended without a handoff. Each problem is
+     * reported once.
+     */
+    public static List<Problem> takeProblems(Path serversDir) throws IOException {
+        List<Problem> problems = new ArrayList<>();
+        if (!Files.isDirectory(serversDir)) {
+            return problems;
+        }
+        try (DirectoryStream<Path> dirs = Files.newDirectoryStream(serversDir, Files::isDirectory)) {
+            for (Path dir : dirs) {
+                Path failure = dir.resolve(FAILURE_FILE);
+                if (Files.exists(failure)) {
+                    problems.add(new Problem(Problem.Kind.FAILED, Path.of(Files.readAllLines(failure).get(0)), failure));
+                    Files.move(failure, dir.resolve(FAILURE_FILE + ".seen"), StandardCopyOption.REPLACE_EXISTING);
+                }
+                Path marker = dir.resolve(SESSION_MARKER);
+                if (Files.exists(marker)) {
+                    Path worldDir = Path.of(Files.readString(marker).trim());
+                    if (isUnlocked(worldDir)) {
+                        problems.add(new Problem(Problem.Kind.INTERRUPTED, worldDir, null));
+                        Files.delete(marker);
+                    }
+                }
+                if (Files.exists(dir.resolve(PID_FILE)) && process(dir).isEmpty()) {
+                    crashLog(dir).ifPresent(log -> problems.add(new Problem(Problem.Kind.FAILED,
+                            Path.of(serverPropertiesOrEmpty(dir).getProperty("level-name", dir.toString())), log)));
+                    Files.delete(dir.resolve(PID_FILE));
+                }
+            }
+        }
+        return problems;
+    }
+
+    /** For a server that exited on its own: its log, if it never started or it crashed. */
+    private static Optional<Path> crashLog(Path dir) throws IOException {
+        Path console = dir.resolve("logs").resolve(CONSOLE_LOG);
+        if (!Files.exists(console) || !Files.readString(console).contains("Done (")) {
+            return Optional.of(console);
+        }
+        Path reports = dir.resolve("crash-reports");
+        if (Files.isDirectory(reports)) {
+            long launched = Files.getLastModifiedTime(dir.resolve(PID_FILE)).toMillis();
+            try (var files = Files.list(reports)) {
+                Optional<Path> report = files.filter(f -> {
+                    try {
+                        return Files.getLastModifiedTime(f).toMillis() >= launched;
+                    } catch (IOException e) {
+                        return false;
+                    }
+                }).findFirst();
+                if (report.isPresent()) {
+                    return report;
+                }
+            }
+        }
+        // Stopped on its own, e.g. an op ran /stop.
+        return Optional.empty();
+    }
+
+    private static Properties serverPropertiesOrEmpty(Path dir) {
+        try {
+            return serverProperties(dir);
+        } catch (IOException e) {
+            return new Properties();
+        }
+    }
+
+    private static boolean isUnlocked(Path worldDir) {
+        try {
+            requireUnlocked(worldDir);
+            return true;
+        } catch (IOException | IllegalStateException e) {
+            return false;
+        }
+    }
+
     public static boolean isRunning(Path serversDir, Path worldDir) {
         return process(serverDir(serversDir, worldDir)).isPresent();
     }
@@ -316,8 +425,22 @@ public final class Handoff {
         StopResult result = StopResult.STOPPED;
         try {
             Properties props = serverProperties(dir);
-            rcon(Integer.parseInt(props.getProperty("rcon.port")), props.getProperty("rcon.password"), "stop");
-        } catch (IOException | RuntimeException e) {
+            int port = Integer.parseInt(props.getProperty("rcon.port"));
+            // The server opens RCON just after it logs "Done", so a stop requested right
+            // after startup can arrive before it listens.
+            long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(15);
+            while (true) {
+                try {
+                    rcon(port, props.getProperty("rcon.password"), "stop");
+                    break;
+                } catch (ConnectException e) {
+                    if (System.nanoTime() > deadline || !process.get().isAlive()) {
+                        throw e;
+                    }
+                    Thread.sleep(250);
+                }
+            }
+        } catch (IOException | RuntimeException | InterruptedException e) {
             result = StopResult.TERMINATED;
             process.get().destroy();
         }
@@ -382,7 +505,7 @@ public final class Handoff {
         Process process = new ProcessBuilder(full)
                 .directory(dir.toFile())
                 .redirectErrorStream(true)
-                .redirectOutput(ProcessBuilder.Redirect.appendTo(dir.resolve("logs").resolve("mcpersist-console.log").toFile()))
+                .redirectOutput(ProcessBuilder.Redirect.to(dir.resolve("logs").resolve(CONSOLE_LOG).toFile()))
                 .start();
         process.getOutputStream().close();
         return process.pid();
@@ -414,14 +537,15 @@ public final class Handoff {
      * Command-line entry point, for tests. {@code --action start} (the default) takes {@code
      * --world --mods --config --servers --minecraft --loader --host uuid:name [--players
      * uuid:name,...] [--java] [--xmx]} and prints the server folder once it has started;
-     * {@code --action status|stop} take {@code --world --servers}.
+     * {@code --action status|stop} take {@code --world --servers}; {@code --action problems}
+     * takes {@code --servers}.
      */
     public static void main(String[] args) throws Exception {
         Properties options = new Properties();
         for (int i = 0; i + 1 < args.length; i += 2) {
             options.setProperty(args[i].replaceFirst("^--", ""), args[i + 1]);
         }
-        Path world = Path.of(options.getProperty("world"));
+        Path world = options.containsKey("world") ? Path.of(options.getProperty("world")) : null;
         Path servers = Path.of(options.getProperty("servers"));
         switch (options.getProperty("action", "start")) {
             case "status" -> {
@@ -430,6 +554,12 @@ public final class Handoff {
             }
             case "stop" -> {
                 System.out.println(stop(servers, world).name().toLowerCase());
+                return;
+            }
+            case "problems" -> {
+                for (Problem problem : takeProblems(servers)) {
+                    System.out.println(problem.kind().name().toLowerCase() + "\t" + problem.worldDir() + "\t" + problem.log());
+                }
                 return;
             }
             case "start" -> {}

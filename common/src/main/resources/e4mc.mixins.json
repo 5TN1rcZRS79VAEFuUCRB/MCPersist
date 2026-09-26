@@ -24,6 +24,7 @@
     "SelectWorldScreenMixin",
     "ServerAddressMixin",
     "ServerNameResolverMixin",
+    "TitleScreenMixin",
     "WorldListEntryMixin",
     "WorldOptionsScreenMixin"
   ]

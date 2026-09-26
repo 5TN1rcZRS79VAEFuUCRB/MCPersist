@@ -2,20 +2,25 @@ package link.e4mc;
 
 import link.e4mc.handoff.Handoff;
 import net.minecraft.client.Minecraft;
+import net.minecraft.client.User;
+import net.minecraft.client.gui.screens.AlertScreen;
+import net.minecraft.client.gui.screens.ConfirmScreen;
 import net.minecraft.client.gui.screens.ConnectScreen;
 import net.minecraft.client.gui.screens.Screen;
+import net.minecraft.network.chat.Component;
 import net.minecraft.client.multiplayer.ServerData;
 import net.minecraft.client.multiplayer.resolver.ServerAddress;
 
 import java.io.IOException;
 import java.nio.file.Path;
+import java.util.List;
 
 /** The client's view of its worlds' background servers. */
 public final class BackgroundServers {
     private BackgroundServers() {}
 
     public static Path serversDir() {
-        return Agnos.gameDir().resolve("mcpersist").resolve("servers");
+        return LocalHandoff.serversDir();
     }
 
     private static Path worldDir(String levelId) {
@@ -49,5 +54,50 @@ public final class BackgroundServers {
 
     public static void stop(String levelId, Runnable then) {
         stop(worldDir(levelId), then);
+    }
+
+    private static boolean problemsShown;
+
+    /**
+     * Once per game: tells the host about background servers that failed, and offers to
+     * start one for a world whose session ended without a handoff. Returns to {@code screen}.
+     */
+    public static void showProblemsOnce(Screen screen) {
+        if (problemsShown) {
+            return;
+        }
+        problemsShown = true;
+        try {
+            showProblems(screen, Handoff.takeProblems(serversDir()), 0);
+        } catch (IOException e) {
+            E4mcClient.LOGGER.error("Failed to check background servers", e);
+        }
+    }
+
+    private static void showProblems(Screen screen, List<Handoff.Problem> problems, int index) {
+        Minecraft minecraft = Minecraft.getInstance();
+        if (index == problems.size()) {
+            minecraft.gui.setScreen(screen);
+            return;
+        }
+        Handoff.Problem problem = problems.get(index);
+        Runnable next = () -> showProblems(screen, problems, index + 1);
+        Component world = Component.literal(problem.worldDir().getFileName().toString());
+        if (problem.kind() == Handoff.Problem.Kind.FAILED) {
+            minecraft.gui.setScreen(new AlertScreen(next,
+                    Component.translatable("mcpersist.problem.failed.title", world),
+                    Component.translatable("mcpersist.problem.failed.message", problem.log().toString())));
+        } else {
+            minecraft.gui.setScreen(new ConfirmScreen(start -> {
+                if (start) {
+                    User user = minecraft.getUser();
+                    Handoff.Player host = new Handoff.Player(user.getProfileId(), user.getName());
+                    // Friends from earlier sessions are already on the whitelist.
+                    new Thread(() -> LocalHandoff.start(problem.worldDir(), host, List.of()), "mcpersist-handoff").start();
+                }
+                next.run();
+            }, Component.translatable("mcpersist.problem.interrupted.title", world),
+                    Component.translatable("mcpersist.problem.interrupted.message")));
+        }
     }
 }
