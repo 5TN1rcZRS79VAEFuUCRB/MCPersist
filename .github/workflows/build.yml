@@ -19,11 +19,15 @@ jobs:
             !fabric/build/libs/*-sources.jar
 
   smoke:
+    name: smoke (${{ matrix.name }})
     needs: build
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        include:
+          - { name: Linux, os: ubuntu-latest }
+          - { name: Windows, os: windows-latest }
+          - { name: macOS, os: macos-latest }
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     steps:
