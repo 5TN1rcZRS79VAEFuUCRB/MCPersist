@@ -5,7 +5,6 @@ pluginManagement {
     }
 }
 
-// forge/ holds e4mc's loader glue, not built until it gets its own build (#23).
-include("fabric", "neoforge")
+include("fabric", "neoforge", "forge")
 
 rootProject.name = "mcpersist"

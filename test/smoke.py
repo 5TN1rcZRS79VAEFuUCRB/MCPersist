@@ -1,6 +1,6 @@
 """Seam 1 smoke test: runs a real headless server with the mod and checks it from outside.
 
-Usage: python test/smoke.py <path to mcpersist-fabric-*.jar or mcpersist-neoforge-*.jar>
+Usage: python test/smoke.py <path to mcpersist-{fabric,neoforge,forge}-*.jar>
 
 Needs Java for the target Minecraft version on PATH, or its path in $JAVA. Downloads the
 loader's server (and Fabric API for Fabric) into a temporary directory. Accepts the
@@ -32,7 +32,11 @@ from pathlib import Path
 
 MINECRAFT_VERSION = "26.3"
 FABRIC_META = "https://meta.fabricmc.net/v2/versions"
-NEOFORGE_MAVEN = "https://maven.neoforged.net/releases/net/neoforged/neoforge"
+# The installer-based loaders: where they publish, and their versions for this Minecraft.
+INSTALLERS = {
+    "neoforge": ("https://maven.neoforged.net/releases/net/neoforged/neoforge", rf"{re.escape(MINECRAFT_VERSION)}\.[^<]+"),
+    "forge": ("https://maven.minecraftforge.net/net/minecraftforge/forge", rf"{re.escape(MINECRAFT_VERSION)}-[^<]+"),
+}
 # Which loader the mod jar is for; set in main().
 LOADER = "fabric"
 
@@ -60,8 +64,8 @@ GSON_JAR = "https://repo1.maven.org/maven2/com/google/code/gson/gson/2.11.0/gson
 
 def download_server(cache, mod_jar):
     shutil.copy(mod_jar, cache / "mod.jar")
-    if LOADER == "neoforge":
-        download_neoforge(cache)
+    if LOADER in INSTALLERS:
+        install_server(cache)
         return
     loader = get_json(f"{FABRIC_META}/loader/{MINECRAFT_VERSION}")[0]["loader"]["version"]
     (cache / "loader.txt").write_text(loader)
@@ -73,19 +77,20 @@ def download_server(cache, mod_jar):
     download(versions[0]["files"][0]["url"], cache / "fabric-api.jar")
 
 
-def download_neoforge(cache):
-    request = urllib.request.Request(f"{NEOFORGE_MAVEN}/maven-metadata.xml", headers={"User-Agent": "mcpersist-smoke-test"})
+def install_server(cache):
+    maven, versions = INSTALLERS[LOADER]
+    request = urllib.request.Request(f"{maven}/maven-metadata.xml", headers={"User-Agent": "mcpersist-smoke-test"})
     with urllib.request.urlopen(request) as response:
-        version = re.findall(rf"<version>({re.escape(MINECRAFT_VERSION)}\.[^<]+)</version>", response.read().decode())[-1]
+        version = re.findall(rf"<version>({versions})</version>", response.read().decode())[-1]
     (cache / "loader.txt").write_text(version)
-    download(f"{NEOFORGE_MAVEN}/{version}/neoforge-{version}-installer.jar", cache / "installer.jar")
-    subprocess.run([os.environ.get("JAVA", "java"), "-jar", "installer.jar", "--installServer", "neoforge-server"],
+    download(f"{maven}/{version}/{LOADER}-{version}-installer.jar", cache / "installer.jar")
+    subprocess.run([os.environ.get("JAVA", "java"), "-jar", "installer.jar", "--installServer", "installed-server"],
                    cwd=cache, check=True, stdout=subprocess.DEVNULL)
 
 
 def prepare_server(root, cache, mod_config):
-    if LOADER == "neoforge":
-        shutil.copytree(cache / "neoforge-server", root, dirs_exist_ok=True)
+    if LOADER in INSTALLERS:
+        shutil.copytree(cache / "installed-server", root, dirs_exist_ok=True)
     else:
         shutil.copy(cache / "server.jar", root)
     (root / "mods").mkdir(exist_ok=True)
@@ -105,10 +110,10 @@ class Server:
         self.log = []
         self.lines = queue.Queue()
         launch = ["-jar", "server.jar"]
-        if LOADER == "neoforge":
+        if LOADER in INSTALLERS:
             # The installer writes the launch arguments to a file under libraries/.
             args = "win_args.txt" if os.name == "nt" else "unix_args.txt"
-            launch = ["@" + str(next(Path(root).glob(f"libraries/net/neoforged/neoforge/*/{args}")).relative_to(root))]
+            launch = ["@" + str(next(Path(root).glob(f"libraries/net/*/{LOADER}/*/{args}")).relative_to(root))]
         self.process = subprocess.Popen(
             [os.environ.get("JAVA", "java"), "-Xmx1G", *jvm_args, *launch, "nogui"],
             cwd=root,
@@ -602,7 +607,7 @@ def main():
     faulthandler.dump_traceback_later(900, repeat=True)
     mod_jar = Path(sys.argv[1]).resolve()
     global LOADER
-    LOADER = "neoforge" if "neoforge" in mod_jar.name else "fabric"
+    LOADER = next(loader for loader in ("neoforge", "forge", "fabric") if loader in mod_jar.name)
     with tempfile.TemporaryDirectory() as tmp:
         cache = Path(tmp)
         download_server(cache, mod_jar)

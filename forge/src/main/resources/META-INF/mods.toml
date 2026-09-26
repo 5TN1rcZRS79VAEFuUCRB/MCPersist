@@ -1,28 +1,22 @@
 modLoader = "javafml"
-loaderVersion = "*"
+loaderVersion = "[66,)"
 license = "MIT"
 
 [[mods]]
-modId = "e4mc"
+modId = "mcpersist"
 version = "${version}"
-displayName = "e4mc"
+displayName = "MCPersist"
 logoFile = "mcpersist_icon.png"
-credits = "skyevg"
-authors = "skyevg"
+authors = "5TN1rcZRS79VAEFuUCRB"
+credits = "Based on e4mc by skyevg"
+displayURL = "https://github.com/5TN1rcZRS79VAEFuUCRB/MCPersist"
 description = '''
-Open a LAN server to anyone, anywhere, anytime.
+e4mc, but your world keeps running after you leave. Based on e4mc by skyevg.
 '''
 
-[[dependencies.e4mc]]
-modId = "forge"
-mandatory = true
-versionRange = "*"
-ordering = "NONE"
-side = "BOTH"
-
-[[dependencies.e4mc]]
+[[dependencies.mcpersist]]
 modId = "minecraft"
 mandatory = true
-versionRange = "[1.18,1.21)"
+versionRange = "[26.3,)"
 ordering = "NONE"
 side = "BOTH"
