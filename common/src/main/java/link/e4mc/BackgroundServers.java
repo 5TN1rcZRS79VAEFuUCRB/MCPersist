@@ -86,7 +86,9 @@ public final class BackgroundServers {
         long deadline = System.currentTimeMillis() + timeoutMillis;
         while (System.currentTimeMillis() < deadline) {
             try (Socket socket = new Socket()) {
-                socket.connect(new InetSocketAddress(InetAddress.getLoopbackAddress(), port), 1000);
+                // The address the server binds (server-ip) and the join uses. Not the loopback
+                // address: Forge's IPv6 preference can make that ::1, where nothing listens.
+                socket.connect(new InetSocketAddress(InetAddress.getByName("127.0.0.1"), port), 1000);
                 socket.setSoTimeout(2000);
                 byte[] host = "127.0.0.1".getBytes(StandardCharsets.UTF_8);
                 ByteArrayOutputStream handshake = new ByteArrayOutputStream();

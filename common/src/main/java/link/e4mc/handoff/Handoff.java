@@ -71,13 +71,15 @@ public final class Handoff {
      * @param maxHeap         the -Xmx value, e.g. "4G"
      * @param host            the world's owner: whitelisted, op level 4
      * @param players         everyone who joined while the host played: whitelisted
+     * @param launcherJar     the MCPersist jar autostart entries run the launcher from, or null to use
+     *                        this class's own jar (Forge and NeoForge don't report one)
      * @param hostWhitelist   the host's in-game whitelist file, or null if their game doesn't use one;
      *                        when given, the server's whitelist is replaced by it (plus the host), so
      *                        removals carry over, and {@code players} isn't needed
      */
     public record Spec(Path worldDir, Path clientModsDir, Path clientConfigDir, Path serversDir,
                        String minecraftVersion, String loader, String loaderVersion, Path java, String maxHeap,
-                       Player host, List<Player> players, Path hostWhitelist) {}
+                       Player host, List<Player> players, Path launcherJar, Path hostWhitelist) {}
 
     private Handoff() {}
 
@@ -107,14 +109,15 @@ public final class Handoff {
         command.add("nogui");
         Files.write(dir.resolve(LAUNCH_FILE), command);
         Launcher.launch(dir);
-        installAutostart(dir, spec.java());
+        installAutostart(dir, spec.java(), spec.launcherJar());
         return dir;
     }
 
     /** So the server comes back after a reboot. A failure here doesn't undo the handoff. */
-    private static void installAutostart(Path dir, Path java) {
+    private static void installAutostart(Path dir, Path java, Path launcherJar) {
         try {
-            Path self = Path.of(Launcher.class.getProtectionDomain().getCodeSource().getLocation().toURI());
+            Path self = launcherJar != null ? launcherJar
+                    : Path.of(Launcher.class.getProtectionDomain().getCodeSource().getLocation().toURI());
             if (!Files.isRegularFile(self)) {
                 throw new IOException("MCPersist isn't running from a jar: " + self);
             }
@@ -656,6 +659,7 @@ public final class Handoff {
                 player(options.getProperty("host")),
                 options.getProperty("players", "").isEmpty() ? List.of()
                         : Arrays.stream(options.getProperty("players").split(",")).map(Handoff::player).toList(),
+                null,
                 options.containsKey("whitelist") ? Path.of(options.getProperty("whitelist")) : null));
         System.out.println(dir);
     }

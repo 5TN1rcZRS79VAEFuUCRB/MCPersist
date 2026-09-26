@@ -30,6 +30,7 @@ public final class LocalHandoff {
                 maxHeap(),
                 host,
                 players,
+                Agnos.jarPath(),
                 usesWhitelist() ? PlayerList.WHITELIST_FILE.toPath().toAbsolutePath() : null);
         try {
             Path dir = Handoff.start(spec);
