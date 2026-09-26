@@ -371,6 +371,13 @@ public class QuiclimeSession {
                                                     )
                                             );
                                             Mirror.addMessage(message);
+                                            // Whitelisting is only applied when the dedicated commands are.
+                                            if (Config.INSTANCE.useWhiteList.value() && Config.INSTANCE.restoreDedicatedCommands.value()) {
+                                                Mirror.addMessage(Mirror.translatable("text.mcpersist.whitelistOn",
+                                                        Mirror.withStyle(Mirror.literal("/whitelist add <name>"), it -> it
+                                                                .withClickEvent(Mirror.suggestCommand("/whitelist add "))
+                                                                .withColor(ChatFormatting.YELLOW))));
+                                            }
                                             if (E4mcClient.badurl) {
                                                 Mirror.addMessage(Mirror.translatable("text.e4mc_minecraft.poisonpill.badurl"));
                                             }

@@ -86,6 +86,10 @@ public class Mirror {
         return new ClickEvent.RunCommand(command);
     }
 
+    public static ClickEvent suggestCommand(String command) {
+        return new ClickEvent.SuggestCommand(command);
+    }
+
     public static ClickEvent copyToClipboard(String text) {
         return new ClickEvent.CopyToClipboard(text);
     }

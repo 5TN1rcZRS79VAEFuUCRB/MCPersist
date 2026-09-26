@@ -14,6 +14,7 @@
     "selectWorld.mcpersist.resetAddress": "Reset MCPersist Address",
     "selectWorld.mcpersist.resetAddress.title": "Give this world a new address?",
     "selectWorld.mcpersist.resetAddress.message": "Anyone using the old address won't be able to join any more. Share the new one with your friends after opening the world.",
+    "text.mcpersist.whitelistOn": "The whitelist is on, so only players you add can join. Before a friend joins for the first time, run %s",
     "text.mcpersist.movingToBackground": "This world is moving to a background server. Rejoin in a moment.",
     "selectWorld.mcpersist.stopBackgroundServer": "Stop Background Server",
     "selectWorld.mcpersist.runningInBackground": "Running in the background. Click to join",
