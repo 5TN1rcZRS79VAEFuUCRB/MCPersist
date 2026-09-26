@@ -570,6 +570,9 @@ def check_server_folder(server_dir, world):
 
 
 def main():
+    # Windows consoles can't print everything a server logs (e.g. "μs"); a failed print
+    # would kill the thread reading the server's output.
+    sys.stdout.reconfigure(errors="replace")
     # If a run hangs, show where every thread is stuck.
     faulthandler.dump_traceback_later(900, repeat=True)
     mod_jar = Path(sys.argv[1]).resolve()
