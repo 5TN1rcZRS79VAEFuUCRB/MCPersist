@@ -30,7 +30,7 @@ public abstract class WorldOptionsScreenMixin {
                     try {
                         WorldPersistence.setPersistent(worldDir, value);
                         if (!value) {
-                            BackgroundServers.stop(worldDir, () -> {});
+                            BackgroundServers.disable(worldDir);
                         }
                     } catch (IOException e) {
                         E4mcClient.LOGGER.error("Failed to save persistence setting for {}", worldDir, e);

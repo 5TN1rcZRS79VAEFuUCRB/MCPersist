@@ -18,17 +18,13 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
-import java.nio.channels.FileChannel;
-import java.nio.channels.FileLock;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
-import java.nio.channels.OverlappingFileLockException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
-import java.nio.file.StandardOpenOption;
 import java.security.SecureRandom;
 import java.time.Duration;
 import java.util.ArrayList;
@@ -52,12 +48,12 @@ import java.util.zip.ZipFile;
  */
 public final class Handoff {
     private static final String FABRIC_META = "https://meta.fabricmc.net/v2/versions";
-    private static final String SERVER_JAR = "fabric-server-launch.jar";
-    static final String LAUNCH_FILE = "mcpersist-launch.txt";
-    static final String PID_FILE = "mcpersist.pid";
+    private static final String SERVER_JAR = Launcher.SERVER_JAR;
+    private static final String LAUNCH_FILE = Launcher.LAUNCH_FILE;
+    private static final String PID_FILE = Launcher.PID_FILE;
     private static final String SESSION_MARKER = "mcpersist-session-open";
-    private static final String FAILURE_FILE = "mcpersist-failure.txt";
-    private static final String CONSOLE_LOG = "mcpersist-console.log";
+    private static final String FAILURE_FILE = Launcher.FAILURE_FILE;
+    private static final String CONSOLE_LOG = Launcher.CONSOLE_LOG;
     private static final Gson GSON = new Gson();
     private static final UUID NIL = new UUID(0, 0);
 
@@ -88,7 +84,7 @@ public final class Handoff {
         if (!WorldPersistence.isPersistent(spec.worldDir())) {
             throw new IllegalStateException(spec.worldDir() + " is not a persistent world");
         }
-        requireUnlocked(spec.worldDir());
+        Launcher.requireUnlocked(spec.worldDir());
         Path dir = serverDir(spec.serversDir(), spec.worldDir());
         Files.createDirectories(dir);
         installServer(dir, spec.minecraftVersion(), spec.loaderVersion());
@@ -102,26 +98,30 @@ public final class Handoff {
 
         List<String> command = List.of(spec.java().toString(), "-Xmx" + spec.maxHeap(), "-jar", SERVER_JAR, "nogui");
         Files.write(dir.resolve(LAUNCH_FILE), command);
-        long pid = launchDetached(dir, command);
-        Files.writeString(dir.resolve(PID_FILE), Long.toString(pid));
+        Launcher.launch(dir);
+        installAutostart(dir, spec.java());
         return dir;
     }
 
-    /** A running game or server holds session.lock; never start a second one on the world. */
-    private static void requireUnlocked(Path worldDir) throws IOException {
-        Path lock = worldDir.resolve("session.lock");
-        if (!Files.exists(lock)) {
-            return;
-        }
-        try (FileChannel channel = FileChannel.open(lock, StandardOpenOption.WRITE)) {
-            FileLock held = channel.tryLock();
-            if (held == null) {
-                throw new IllegalStateException(worldDir + " is open in another game or server");
+    /** So the server comes back after a reboot. A failure here doesn't undo the handoff. */
+    private static void installAutostart(Path dir, Path java) {
+        try {
+            Path self = Path.of(Launcher.class.getProtectionDomain().getCodeSource().getLocation().toURI());
+            if (!Files.isRegularFile(self)) {
+                throw new IOException("MCPersist isn't running from a jar: " + self);
             }
-            held.release();
-        } catch (OverlappingFileLockException e) {
-            throw new IllegalStateException(worldDir + " is still open in this game", e);
+            Files.copy(self, dir.resolve(Launcher.LAUNCHER_JAR), StandardCopyOption.REPLACE_EXISTING);
+            Autostart.install(dir, java);
+        } catch (Exception e) {
+            System.err.println("MCPersist: couldn't set up autostart for " + dir + ": " + e);
         }
+    }
+
+    /** Turning persistence off: stops the world's background server and removes its autostart. */
+    public static StopResult disable(Path serversDir, Path worldDir) throws IOException {
+        StopResult result = stop(serversDir, worldDir);
+        Autostart.remove(serverDir(serversDir, worldDir));
+        return result;
     }
 
     private static void installServer(Path dir, String minecraftVersion, String loaderVersion) throws IOException, InterruptedException {
@@ -308,9 +308,7 @@ public final class Handoff {
 
     /** Records a handoff that failed before its server could start, for the next launch. */
     public static void recordFailure(Path serversDir, Path worldDir, Exception e) throws IOException {
-        Path dir = serverDir(serversDir, worldDir);
-        Files.createDirectories(dir);
-        Files.writeString(dir.resolve(FAILURE_FILE), worldDir.toAbsolutePath() + "\n" + e);
+        Launcher.recordFailure(serverDir(serversDir, worldDir), worldDir, e);
     }
 
     public record Problem(Kind kind, Path worldDir, Path log) {
@@ -393,7 +391,7 @@ public final class Handoff {
 
     private static boolean isUnlocked(Path worldDir) {
         try {
-            requireUnlocked(worldDir);
+            Launcher.requireUnlocked(worldDir);
             return true;
         } catch (IOException | IllegalStateException e) {
             return false;
@@ -492,25 +490,6 @@ public final class Handoff {
         }
     }
 
-    /** Starts the server so it keeps running after this JVM exits. */
-    private static long launchDetached(Path dir, List<String> command) throws IOException {
-        List<String> full = new ArrayList<>();
-        // On Linux, a new session keeps the server out of the game's process group, so it
-        // survives the terminal or launcher that started the game going away.
-        if (Files.isExecutable(Path.of("/usr/bin/setsid"))) {
-            full.add("/usr/bin/setsid");
-        }
-        full.addAll(command);
-        Files.createDirectories(dir.resolve("logs"));
-        Process process = new ProcessBuilder(full)
-                .directory(dir.toFile())
-                .redirectErrorStream(true)
-                .redirectOutput(ProcessBuilder.Redirect.to(dir.resolve("logs").resolve(CONSOLE_LOG).toFile()))
-                .start();
-        process.getOutputStream().close();
-        return process.pid();
-    }
-
     private static String get(String url) throws IOException, InterruptedException {
         HttpResponse<String> response = HttpClient.newHttpClient().send(
                 HttpRequest.newBuilder(URI.create(url)).header("User-Agent", "MCPersist").build(),
@@ -537,7 +516,7 @@ public final class Handoff {
      * Command-line entry point, for tests. {@code --action start} (the default) takes {@code
      * --world --mods --config --servers --minecraft --loader --host uuid:name [--players
      * uuid:name,...] [--java] [--xmx]} and prints the server folder once it has started;
-     * {@code --action status|stop} take {@code --world --servers}; {@code --action problems}
+     * {@code --action status|stop|disable} take {@code --world --servers}; {@code --action problems}
      * takes {@code --servers}.
      */
     public static void main(String[] args) throws Exception {
@@ -554,6 +533,10 @@ public final class Handoff {
             }
             case "stop" -> {
                 System.out.println(stop(servers, world).name().toLowerCase());
+                return;
+            }
+            case "disable" -> {
+                System.out.println(disable(servers, world).name().toLowerCase());
                 return;
             }
             case "problems" -> {

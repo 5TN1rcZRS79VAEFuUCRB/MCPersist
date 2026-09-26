@@ -52,6 +52,17 @@ public final class BackgroundServers {
         }, "mcpersist-stop").start();
     }
 
+    /** Turning persistence off: stops the server and removes its autostart entry. */
+    public static void disable(Path worldDir) {
+        new Thread(() -> {
+            try {
+                Handoff.disable(serversDir(), worldDir);
+            } catch (IOException e) {
+                E4mcClient.LOGGER.error("Failed to disable the background server for {}", worldDir, e);
+            }
+        }, "mcpersist-stop").start();
+    }
+
     public static void stop(String levelId, Runnable then) {
         stop(worldDir(levelId), then);
     }

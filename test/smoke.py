@@ -10,6 +10,7 @@ With $MCPERSIST_RELAY set to an mcpersist-relay binary, also checks world addres
 a local relay (needs openssl and keytool on PATH).
 """
 
+import atexit
 import faulthandler
 import json
 import os
@@ -284,26 +285,46 @@ FRIEND = ("66666666-7777-8888-9999-000000000000", "SmokeFriend")
 NIL_UUID = "00000000-0000-0000-0000-000000000000"
 
 
-def handoff_action(cache, world, servers, action):
+# Autostart entries go under this home, not the real one.
+HOME = Path(tempfile.mkdtemp(prefix="mcpersist-home-"))
+atexit.register(shutil.rmtree, HOME, ignore_errors=True)
+
+
+def handoff_jvm(cache):
     classpath = os.pathsep.join([str(cache / "mod.jar"), str(cache / "gson.jar")])
+    return [os.environ.get("JAVA", "java"), f"-Duser.home={HOME}", "-cp", classpath, "link.e4mc.handoff.Handoff"]
+
+
+def handoff_env():
+    return dict(os.environ, XDG_CONFIG_HOME=str(HOME / ".config"))
+
+
+def autostart_files():
+    if os.name == "nt":
+        return sorted((HOME / "AppData/Roaming/Microsoft/Windows/Start Menu/Programs/Startup").glob("mcpersist-*.cmd"))
+    if sys.platform == "darwin":
+        return sorted((HOME / "Library/LaunchAgents").glob("link.mcpersist.*.plist"))
+    units = HOME / ".config/systemd/user"
+    return sorted(units.glob("mcpersist-*.service")) + sorted((units / "default.target.wants").glob("mcpersist-*.service"))
+
+
+def handoff_action(cache, world, servers, action):
     world_args = ["--world", str(world)] if world else []
     return subprocess.run(
-        [os.environ.get("JAVA", "java"), "-cp", classpath, "link.e4mc.handoff.Handoff",
-         "--action", action, *world_args, "--servers", str(servers)],
-        capture_output=True, text=True, timeout=180,
+        [*handoff_jvm(cache), "--action", action, *world_args, "--servers", str(servers)],
+        capture_output=True, text=True, timeout=180, env=handoff_env(),
     ).stdout.strip()
 
 
 def hand_off(cache, game, world, servers):
     """Runs the handoff entry point as the mod would, without a game window."""
-    classpath = os.pathsep.join([str(cache / "mod.jar"), str(cache / "gson.jar")])
     return subprocess.run(
-        [os.environ.get("JAVA", "java"), "-cp", classpath, "link.e4mc.handoff.Handoff",
+        [*handoff_jvm(cache),
          "--world", str(world), "--mods", str(game / "mods"), "--config", str(game / "config"),
          "--servers", str(servers), "--minecraft", MINECRAFT_VERSION,
          "--loader", (cache / "loader.txt").read_text(), "--xmx", "768M",
          "--host", f"{HOST[0]}:{HOST[1]}", "--players", f"{FRIEND[0]}:{FRIEND[1]}"],
-        capture_output=True, text=True, timeout=300,
+        capture_output=True, text=True, timeout=300, env=handoff_env(),
     )
 
 
@@ -373,6 +394,8 @@ def test_handoff(cache, relay_bin):
                         fail("server wasn't stopped cleanly (no save on shutdown)")
                     if handoff_action(cache, world, servers, "status") != "stopped":
                         fail("status still reports a stopped server as running")
+                    if attempt == 0:
+                        check_autostart(cache, world, servers, server_dir, console)
                 finally:
                     if process_alive(pid):
                         stop_process(pid)
@@ -382,7 +405,7 @@ def test_handoff(cache, relay_bin):
             os.environ.pop("JAVA_TOOL_OPTIONS", None)
             if relay:
                 relay.kill()
-    print("PASS: handoff ran the world in place in a detached server, whitelisted, host as op, stopped cleanly"
+    print("PASS: handoff ran the world in place in a detached server, whitelisted, host as op, stopped cleanly, autostarted"
           + (f" at {domains[0]} both times" if relay else ""))
 
 
@@ -426,6 +449,35 @@ def test_failed_start(cache):
         if handoff_action(cache, world, servers, "status") != "stopped":
             fail("crashed server was restarted")
     print("PASS: a background server that failed to start was reported once, didn't touch the world, and wasn't retried")
+
+
+def check_autostart(cache, world, servers, server_dir, console):
+    """The login entry exists, starts the server like a login would, and is removed by disable."""
+    entries = autostart_files()
+    expected = 2 if os.name != "nt" and sys.platform != "darwin" else 1
+    if len(entries) != expected:
+        fail(f"expected {expected} autostart file(s), found {entries}")
+    text = entries[0].read_text()
+    if "link.e4mc.handoff.Launcher" not in text or str(server_dir.absolute()) not in text:
+        fail(f"autostart entry doesn't run the launcher for {server_dir}: {text}")
+
+    # What the entry runs at login.
+    console.unlink()
+    boot = subprocess.Popen(
+        [os.environ.get("JAVA", "java"), "-cp", str(server_dir / "mcpersist-launcher.jar"),
+         "link.e4mc.handoff.Launcher", str(server_dir.absolute())])
+    try:
+        wait_in_file(console, "Done (", timeout=300)
+        if handoff_action(cache, world, servers, "status") != "running":
+            fail("the autostart launcher didn't start the server")
+        if handoff_action(cache, world, servers, "disable") != "stopped":
+            fail("disable didn't stop the server with its own stop command")
+        if autostart_files():
+            fail(f"disable left autostart files behind: {autostart_files()}")
+        boot.wait(timeout=60)
+    finally:
+        if boot.poll() is None:
+            boot.kill()
 
 
 def check_server_folder(server_dir, world):
