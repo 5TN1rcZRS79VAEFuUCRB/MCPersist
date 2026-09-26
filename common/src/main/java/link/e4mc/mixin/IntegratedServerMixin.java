@@ -27,18 +27,25 @@ import java.util.concurrent.TimeoutException;
  */
 @Mixin(IntegratedServer.class)
 public abstract class IntegratedServerMixin {
+    @Unique
+    private boolean mcpersist$playersMoved;
+
     // halt() first drops every player but the host without a word, before the server stops,
-    // so this has to run ahead of it.
+    // so this has to run ahead of it. It can run more than once.
     @Inject(method = "halt", at = @At("HEAD"))
     private void mcpersist$transferPlayers(boolean waitForServer, CallbackInfo ci) {
         IntegratedServer server = (IntegratedServer) (Object) this;
-        if (!WorldPersistence.isPersistent(server.getWorldPath(LevelResource.ROOT))) {
+        if (mcpersist$playersMoved || !WorldPersistence.isPersistent(server.getWorldPath(LevelResource.ROOT))) {
             return;
         }
+        mcpersist$playersMoved = true;
         List<CompletableFuture<Void>> transfers = new ArrayList<>();
         server.executeBlocking(() -> {
             QuiclimeSession session = E4mcClient.session;
-            String domain = session != null ? session.domain : null;
+            // Until the relay stops routing new players here, a transferred player would
+            // reconnect straight back to this closing game, which refuses transfers.
+            String domain = session != null && session.domain != null && session.handOff(2, TimeUnit.SECONDS)
+                    ? session.domain : null;
             for (ServerPlayer player : server.getPlayerList().getPlayers()) {
                 if (server.isSingleplayerOwner(player.nameAndId())) {
                     continue;

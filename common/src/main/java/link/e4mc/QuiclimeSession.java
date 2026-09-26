@@ -35,7 +35,10 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.function.Consumer;
 
 public class QuiclimeSession {
@@ -71,6 +74,14 @@ public class QuiclimeSession {
             public DialtoneRegisterTicketMessageServerbound(String ticket) {
                 this.ticket = ticket;
             }
+        }
+
+        public static class HandingOffMessageServerbound implements ControlMessage {
+            String kind = "handing_off";
+        }
+
+        public static class HandedOffMessageClientbound implements ControlMessage {
+            String kind = "handed_off";
         }
 
         public static class DomainAssignmentCompleteMessageClientbound implements ControlMessage {
@@ -154,6 +165,9 @@ public class QuiclimeSession {
                     case "ticket_registered":
                         out.add(gson.fromJson(json, TicketRegisteredMessageClientbound.class));
                         break;
+                    case "handed_off":
+                        out.add(new HandedOffMessageClientbound());
+                        break;
                     case "unknown_message":
                         out.add(gson.fromJson(json, UnknownMessageMessageClientbound.class));
                         break;
@@ -188,6 +202,8 @@ public class QuiclimeSession {
     final String worldKey;
     /** The address the relay assigned, once assigned. */
     public volatile String domain;
+    private volatile QuicStreamChannel controlChannel;
+    private final CompletableFuture<Void> handedOff = new CompletableFuture<>();
 
     /** {@code worldKey} is the world's key if it's persistent, else null. */
     public QuiclimeSession(ChannelHandler handler, EventLoopGroup group, String worldKey) {
@@ -317,7 +333,9 @@ public class QuiclimeSession {
                             ch.pipeline().addLast(new ControlMessageCodec(), new SimpleChannelInboundHandler<ControlMessageCodec.ControlMessage>() {
                                 @Override
                                 protected void channelRead0(ChannelHandlerContext ctx, ControlMessageCodec.ControlMessage msg) {
-                                    if (msg instanceof ControlMessageCodec.DomainAssignmentFailedMessageClientbound failed) {
+                                    if (msg instanceof ControlMessageCodec.HandedOffMessageClientbound) {
+                                        handedOff.complete(null);
+                                    } else if (msg instanceof ControlMessageCodec.DomainAssignmentFailedMessageClientbound failed) {
                                         LOGGER.error("Relay refused this world's address: {}", failed.reason);
                                         if (Agnos.isClient()) {
                                             Mirror.addMessage(Mirror.translatable("name_in_use".equals(failed.reason)
@@ -412,6 +430,7 @@ public class QuiclimeSession {
                             throw new RuntimeException(it.cause());
                         }
                         QuicStreamChannel streamChannel = (QuicStreamChannel) it.getNow();
+                        controlChannel = streamChannel;
                         LOGGER.info("control channel open: {}", streamChannel);
                         streamChannel
                                 .writeAndFlush(new ControlMessageCodec.ProbeCapabilitiesMessageServerbound())
@@ -443,6 +462,27 @@ public class QuiclimeSession {
             callback.accept(false);
         } else {
             channel.close().addListener(it -> callback.accept(true));
+        }
+    }
+
+    /**
+     * Asks the relay to send new players to the world's next host (its background server)
+     * instead of here, keeping current players connected. Whether the relay confirmed in time.
+     */
+    public boolean handOff(long timeout, TimeUnit unit) {
+        QuicStreamChannel channel = controlChannel;
+        if (channel == null || !channel.isActive()) {
+            return false;
+        }
+        channel.writeAndFlush(new ControlMessageCodec.HandingOffMessageServerbound());
+        try {
+            handedOff.get(timeout, unit);
+            return true;
+        } catch (TimeoutException | ExecutionException e) {
+            return false;
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return false;
         }
     }
 
