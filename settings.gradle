@@ -5,8 +5,7 @@ pluginManagement {
     }
 }
 
-// Built for Fabric on Minecraft 26.x only. forge/ and neoforge/ keep e4mc's loader glue
-// for later; they are not part of the build.
+// forge/ and neoforge/ hold e4mc's loader glue, not built until they get their own build (#21, #23).
 include("fabric")
 
 rootProject.name = "mcpersist"

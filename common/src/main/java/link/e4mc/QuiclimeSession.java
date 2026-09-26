@@ -23,7 +23,11 @@ import link.e4mc.dialtone.DialtoneServerChannel;
 import link.e4mc.iroh.Endpoint;
 import net.minecraft.ChatFormatting;
 import net.minecraft.client.Minecraft;
+import net.minecraft.client.Minecraft;
+import net.minecraft.network.chat.ClickEvent;
 import net.minecraft.network.chat.Component;
+import net.minecraft.network.chat.HoverEvent;
+import net.minecraft.network.chat.MutableComponent;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -188,12 +192,6 @@ public class QuiclimeSession {
         STOPPED
     }
 
-    static class BrokerResponse {
-        String id;
-        String host;
-        int port;
-    }
-
     final EventLoopGroup group;
     private DatagramChannel datagramChannel;
     private QuicChannel quicChannel;
@@ -218,27 +216,8 @@ public class QuiclimeSession {
         thread.start();
     }
 
-    private static BrokerResponse getRelay() throws Exception {
-        if (Config.INSTANCE.useBroker.value()) {
-            var httpClient = HttpClient.newHttpClient();
-            var request = HttpRequest
-                    .newBuilder(new URI(Config.INSTANCE.brokerUrl.value()))
-                    .header("Accept", "application/json")
-                    .build();
-            LOGGER.info("broker req: {}", request);
-            var response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
-            LOGGER.info("broker resp: {}", response);
-            if (response.statusCode() != 200) {
-                throw new RuntimeException();
-            }
-            return gson.fromJson(response.body(), BrokerResponse.class);
-        } else {
-            var resp = new BrokerResponse();
-            resp.id = "custom";
-            resp.host = Config.INSTANCE.relayHost.value();
-            resp.port = Config.INSTANCE.relayPort.value();
-            return resp;
-        }
+    private static void addMessage(Component message) {
+        Minecraft.getInstance().execute(() -> Minecraft.getInstance().gui.hud.getChat().addClientSystemMessage(message));
     }
 
     public static String[] getRelayMap() throws Exception {
@@ -258,15 +237,16 @@ public class QuiclimeSession {
 
     public void start() {
         try {
-            var relayInfo = getRelay();
-            LOGGER.info("using relay {}", relayInfo.id);
+            String relayHost = Config.INSTANCE.relayHost.value();
+            int relayPort = Config.INSTANCE.relayPort.value();
+            LOGGER.info("using relay {}:{}", relayHost, relayPort);
             QuicSslContext context = QuicSslContextBuilder
                     .forClient()
                     .applicationProtocols("quiclime")
                     .build();
             var codec = new QuicClientCodecBuilder()
                     .sslContext(context)
-                    .sslEngineProvider(it -> context.newEngine(it.alloc(), relayInfo.host, relayInfo.port))
+                    .sslEngineProvider(it -> context.newEngine(it.alloc(), relayHost, relayPort))
                     .initialMaxStreamsBidirectional(512)
                     .maxIdleTimeout(10, TimeUnit.SECONDS)
                     .initialMaxData(4611686018427387903L)
@@ -318,7 +298,7 @@ public class QuiclimeSession {
                                 state = State.STOPPED;
                             }
                         })
-                        .remoteAddress(new InetSocketAddress(InetAddress.getByName(relayInfo.host), relayInfo.port))
+                        .remoteAddress(new InetSocketAddress(InetAddress.getByName(relayHost), relayPort))
                         .connect()
                         .addListener(quicChannelFuture -> {
                     if (!quicChannelFuture.isSuccess()) {
@@ -338,7 +318,7 @@ public class QuiclimeSession {
                                     } else if (msg instanceof ControlMessageCodec.DomainAssignmentFailedMessageClientbound failed) {
                                         LOGGER.error("Relay refused this world's address: {}", failed.reason);
                                         if (Agnos.isClient()) {
-                                            Mirror.addMessage(Mirror.translatable("name_in_use".equals(failed.reason)
+                                            addMessage(Component.translatable("name_in_use".equals(failed.reason)
                                                     ? "text.mcpersist.addressInUse"
                                                     : "text.mcpersist.addressRefused"));
                                         }
@@ -352,40 +332,33 @@ public class QuiclimeSession {
                                         QuiclimeSession.this.domain = domain;
                                         LOGGER.info("Domain assigned: {}", domain);
                                         if (Agnos.isClient()) {
-                                            Component domainComponent = Mirror.literal(domain);
-                                            if (Config.INSTANCE.hideDomainInChat.value()) {
-                                                domainComponent = Mirror.translatable("text.e4mc_minecraft.hiddenDomain");
-                                            }
-                                            Component message = Mirror.append(Mirror.translatable(
-                                                    "text.e4mc_minecraft.domainAssigned",
-                                                    Mirror.withStyle(domainComponent, it ->
-                                                    it
-                                                            .withClickEvent(Mirror.copyToClipboard(domain))
+                                            MutableComponent domainComponent = Config.INSTANCE.hideDomainInChat.value()
+                                                    ? Component.translatable("text.e4mc_minecraft.hiddenDomain")
+                                                    : Component.literal(domain);
+                                            Component message = Component.translatable("text.e4mc_minecraft.domainAssigned",
+                                                    domainComponent.withStyle(it -> it
+                                                            .withClickEvent(new ClickEvent.CopyToClipboard(domain))
                                                             .withColor(ChatFormatting.GREEN)
-                                                            .withHoverEvent(Mirror.showText(Mirror.translatable("chat.copy.click"))))
-                                            ),
-                                                    Mirror.withStyle(Mirror.translatable("text.e4mc_minecraft.clickToStop"), it ->
-                                                            it
-                                                                    .withClickEvent(Mirror.runCommand("/e4mc stop"))
-                                                                    .withColor(ChatFormatting.GRAY)
-                                                    )
-                                            );
-                                            Mirror.addMessage(message);
+                                                            .withHoverEvent(new HoverEvent.ShowText(Component.translatable("chat.copy.click")))))
+                                                    .append(Component.translatable("text.e4mc_minecraft.clickToStop").withStyle(it -> it
+                                                            .withClickEvent(new ClickEvent.RunCommand("/e4mc stop"))
+                                                            .withColor(ChatFormatting.GRAY)));
+                                            addMessage(message);
                                             // Whitelisting is only applied when the dedicated commands are.
                                             if (Config.INSTANCE.useWhiteList.value() && Config.INSTANCE.restoreDedicatedCommands.value()) {
-                                                Mirror.addMessage(Mirror.translatable("text.mcpersist.whitelistOn",
-                                                        Mirror.withStyle(Mirror.literal("/whitelist add <name>"), it -> it
-                                                                .withClickEvent(Mirror.suggestCommand("/whitelist add "))
+                                                addMessage(Component.translatable("text.mcpersist.whitelistOn",
+                                                        Component.literal("/whitelist add <name>").withStyle(it -> it
+                                                                .withClickEvent(new ClickEvent.SuggestCommand("/whitelist add "))
                                                                 .withColor(ChatFormatting.YELLOW))));
                                             }
                                             if (E4mcClient.badurl) {
-                                                Mirror.addMessage(Mirror.translatable("text.e4mc_minecraft.poisonpill.badurl"));
+                                                addMessage(Component.translatable("text.e4mc_minecraft.poisonpill.badurl"));
                                             }
                                         }
                                     }
                                     if (msg instanceof ControlMessageCodec.RequestMessageBroadcastMessageClientbound) {
                                         if (Agnos.isClient()) {
-                                            Mirror.addMessage(Mirror.literal(((ControlMessageCodec.RequestMessageBroadcastMessageClientbound) msg).message));
+                                            addMessage(Component.literal(((ControlMessageCodec.RequestMessageBroadcastMessageClientbound) msg).message));
                                         }
                                     }
                                     if (msg instanceof ControlMessageCodec.HasCapabilitiesMessageClientbound) {
@@ -460,7 +433,7 @@ public class QuiclimeSession {
         failureCause = e;
         E4mcClient.LOGGER.error("error in e4mc", e);
         if (Agnos.isClient()) {
-            Mirror.addMessage(Mirror.translatable("text.e4mc_minecraft.error"));
+            addMessage(Component.translatable("text.e4mc_minecraft.error"));
         }
     }
 

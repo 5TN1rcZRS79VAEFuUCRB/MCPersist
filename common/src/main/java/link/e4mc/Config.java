@@ -10,10 +10,6 @@ public class Config extends ReflectiveConfig {
     @Comment("Whether to hide the domain on chat and only allow copying")
     public final TrackedValue<Boolean> hideDomainInChat = this.value(false);
 
-    @Comment("Whether to use the broker to get the best relay based on location or use a hard-coded relay.")
-    public final TrackedValue<Boolean> useBroker = this.value(false);
-    public final TrackedValue<String> brokerUrl = this.value("https://broker.e4mc.link/getBestRelay");
-
     // The MCPersist relay: persistent worlds keep their address only on a relay that
     // stores world keys, which e4mc's relays don't.
     public final TrackedValue<String> relayHost = this.value("relay.mcpersist.com");

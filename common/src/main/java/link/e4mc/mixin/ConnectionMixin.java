@@ -10,6 +10,7 @@ import link.e4mc.dialtone.DialtoneAddress;
 import link.e4mc.dialtone.DialtoneAmbientSession;
 import link.e4mc.dialtone.DialtoneChannel;
 import net.minecraft.network.Connection;
+import net.minecraft.server.network.EventLoopGroupHolder;
 import org.objectweb.asm.Opcodes;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Shadow;
@@ -37,28 +38,14 @@ public abstract class ConnectionMixin implements DialtoneConnectionExtensions {
         return null;
     }
 
-    @Inject(method = "/^(connect|method_52271|m_290025_)$/", at = @At("HEAD"), require = 0)
-    private static void hijackStart(InetSocketAddress inetSocketAddress, @Coerce Object obj, Connection connection, CallbackInfoReturnable<ChannelFuture> cir) {
+    @Inject(method = "connect", at = @At("HEAD"))
+    private static void hijackStart(InetSocketAddress inetSocketAddress, EventLoopGroupHolder groups, Connection connection, CallbackInfoReturnable<ChannelFuture> cir) {
         if (inetSocketAddress instanceof SmugglersInetSocketAddress smuggledAddress) {
             e4mc$smuggledDialtoneAddress = new DialtoneAddress(smuggledAddress.ticket);
         }
     }
 
-    @Surrogate
-    private static void hijackStart(InetSocketAddress inetSocketAddress, boolean bl, Connection connection, CallbackInfoReturnable<ChannelFuture> cir) {
-        if (inetSocketAddress instanceof SmugglersInetSocketAddress smuggledAddress) {
-            e4mc$smuggledDialtoneAddress = new DialtoneAddress(smuggledAddress.ticket);
-        }
-    }
-
-    @Inject(method = "name=/^(connectToServer|method_10753|m_178300_)$/ desc=/^\\(Ljava\\/net\\/InetSocketAddress;Z\\)L.+;$/", at = @At("HEAD"), require = 0)
-    private static void hijackStartAlt(InetSocketAddress inetSocketAddress, boolean bl, CallbackInfoReturnable<Connection> cir) {
-        if (inetSocketAddress instanceof SmugglersInetSocketAddress smuggledAddress) {
-            e4mc$smuggledDialtoneAddress = new DialtoneAddress(smuggledAddress.ticket);
-        }
-    }
-
-    @ModifyArg(method = "/^(connect|method_52271|m_290025_|connectToServer|method_10753|m_178300_)$/", at = @At(value = "INVOKE", target = "Lio/netty/bootstrap/Bootstrap;channel(Ljava/lang/Class;)Lio/netty/bootstrap/AbstractBootstrap;"))
+    @ModifyArg(method = "connect", at = @At(value = "INVOKE", target = "Lio/netty/bootstrap/Bootstrap;channel(Ljava/lang/Class;)Lio/netty/bootstrap/AbstractBootstrap;"))
     private static Class hijackChannel(Class clazz) {
         if (e4mc$smuggledDialtoneAddress != null) {
             return DialtoneChannel.class;
@@ -67,7 +54,7 @@ public abstract class ConnectionMixin implements DialtoneConnectionExtensions {
         }
     }
 
-    @ModifyArg(method = "/^(connect|method_52271|m_290025_|connectToServer|method_10753|m_178300_)$/", at = @At(value = "INVOKE", target = "Lio/netty/bootstrap/Bootstrap;group(Lio/netty/channel/EventLoopGroup;)Lio/netty/bootstrap/AbstractBootstrap;"))
+    @ModifyArg(method = "connect", at = @At(value = "INVOKE", target = "Lio/netty/bootstrap/Bootstrap;group(Lio/netty/channel/EventLoopGroup;)Lio/netty/bootstrap/AbstractBootstrap;"))
     private static EventLoopGroup hijackGroup(EventLoopGroup group) {
         if (e4mc$smuggledDialtoneAddress != null) {
             return DialtoneAmbientSession.INSTANCE.group;
@@ -76,7 +63,7 @@ public abstract class ConnectionMixin implements DialtoneConnectionExtensions {
         }
     }
 
-    @WrapOperation(method = "/^(connect|method_52271|m_290025_|connectToServer|method_10753|m_178300_)$/", at = @At(value = "INVOKE", target = "Lio/netty/bootstrap/Bootstrap;connect(Ljava/net/InetAddress;I)Lio/netty/channel/ChannelFuture;"))
+    @WrapOperation(method = "connect", at = @At(value = "INVOKE", target = "Lio/netty/bootstrap/Bootstrap;connect(Ljava/net/InetAddress;I)Lio/netty/channel/ChannelFuture;"))
     private static ChannelFuture hijackConnect(Bootstrap instance, InetAddress inetHost, int inetPort, Operation<ChannelFuture> operation) {
         if (e4mc$smuggledDialtoneAddress != null) {
             var ret = instance.connect(e4mc$smuggledDialtoneAddress);

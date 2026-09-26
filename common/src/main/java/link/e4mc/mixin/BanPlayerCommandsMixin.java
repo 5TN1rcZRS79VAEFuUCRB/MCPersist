@@ -3,7 +3,6 @@ package link.e4mc.mixin;
 import com.mojang.brigadier.builder.ArgumentBuilder;
 import com.mojang.brigadier.builder.LiteralArgumentBuilder;
 import com.mojang.brigadier.exceptions.CommandSyntaxException;
-import link.e4mc.Mirror;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.server.commands.BanPlayerCommands;
 import org.spongepowered.asm.mixin.Mixin;
@@ -18,7 +17,7 @@ public class BanPlayerCommandsMixin {
     private static ArgumentBuilder<CommandSourceStack, LiteralArgumentBuilder<CommandSourceStack>> allowOwner(LiteralArgumentBuilder<CommandSourceStack> instance, Predicate<CommandSourceStack> predicate) {
         return instance.requires(src -> {
             try {
-                if (Mirror.isSingleplayerOwner(src.getServer(), src.getPlayerOrException()))
+                if (src.getServer().isSingleplayerOwner(src.getPlayerOrException().nameAndId()))
                     return true;
             } catch (CommandSyntaxException ignored) {
             }

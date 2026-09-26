@@ -4,7 +4,9 @@ import com.mojang.brigadier.CommandDispatcher;
 import com.mojang.brigadier.exceptions.CommandSyntaxException;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.commands.Commands;
+import net.minecraft.network.chat.Component;
 import net.minecraft.server.commands.*;
+import net.minecraft.server.permissions.Permissions;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -41,10 +43,10 @@ public class E4mcClient {
                                 return false;
                             }
                             if (src.getServer().isDedicatedServer()) {
-                                return Mirror.hasOwnerPermission(src);
+                                return src.permissions().hasPermission(Permissions.COMMANDS_OWNER);
                             } else {
                                 try {
-                                    return Mirror.isSingleplayerOwner(src.getServer(), src.getPlayerOrException());
+                                    return src.getServer().isSingleplayerOwner(src.getPlayerOrException().nameAndId());
                                 } catch (CommandSyntaxException e) {
                                     return false;
                                 }
@@ -53,19 +55,19 @@ public class E4mcClient {
                         .then(Commands.literal("stop").executes(ctx -> {
                             if ((session != null) && (session.state != QuiclimeSession.State.STOPPED)) {
                                 session.stop();
-                                Mirror.sendSuccessToSource(ctx.getSource(), Mirror.translatable("text.e4mc_minecraft.closeServer"));
+                                ctx.getSource().sendSuccess(() -> Component.translatable("text.e4mc_minecraft.closeServer"), true);
                             } else {
-                                Mirror.sendFailureToSource(ctx.getSource(), Mirror.translatable("text.e4mc_minecraft.serverAlreadyClosed"));
+                                ctx.getSource().sendFailure(Component.translatable("text.e4mc_minecraft.serverAlreadyClosed"));
                             }
                             return 1;
                         }))
                         .then(Commands.literal("doctor").executes(ctx -> {
                             var thread = new Thread(() -> {
                                 LOGGER.info("generating e4mc doctor report");
-                                Mirror.sendSuccessToSource(ctx.getSource(), Mirror.translatable("text.e4mc_minecraft.doctor.start"));
+                                ctx.getSource().sendSuccess(() -> Component.translatable("text.e4mc_minecraft.doctor.start"), true);
                                 var diag = Doctor.doctor();
                                 LOGGER.info("e4mc doctor report:\n{}", diag);
-                                Mirror.sendSuccessToSource(ctx.getSource(), Mirror.literal(diag));
+                                ctx.getSource().sendSuccess(() -> Component.literal(diag), true);
                             }, "e4mc_minecraft-doctor");
                             thread.setDaemon(true);
                             thread.start();

@@ -153,8 +153,8 @@ def test_commands(cache):
         # /e4mc's; before the fix this crashed the tick loop on 1.21.11+ (e4mc#228).
         server.command("help")
         server.wait_for("/e4mc", timeout=30)
-        if "broker req" in server.stop_cleanly():
-            fail("mod contacted the relay broker despite hostEnabled = false")
+        if "using relay" in server.stop_cleanly():
+            fail("mod contacted the relay despite hostEnabled = false")
     print("PASS: server ran the mod, listed /e4mc for the console, and stopped cleanly")
 
 
@@ -202,7 +202,6 @@ def start_relay(relay_bin, root):
     relay = subprocess.Popen([relay_bin], env=env)
     jvm_args = [f"-Djavax.net.ssl.trustStore={root / 'trust.p12'}", "-Djavax.net.ssl.trustStorePassword=changeit"]
     mod_config = (
-        "useBroker = false\n"
         'relayHost = "localhost"\n'
         f"relayPort = {quic_port}\n"
         "dialtoneHostEnabled = false\n"
