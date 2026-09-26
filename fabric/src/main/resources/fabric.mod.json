@@ -5,7 +5,10 @@
   "name": "MCPersist",
   "description": "e4mc, but your world keeps running after you leave. Based on e4mc by skyevg.",
   "authors": [
-    "skyevg"
+    "5TN1rcZRS79VAEFuUCRB"
+  ],
+  "contributors": [
+    "skyevg (e4mc)"
   ],
   "contact": {
     "homepage": "https://github.com/5TN1rcZRS79VAEFuUCRB/MCPersist",
