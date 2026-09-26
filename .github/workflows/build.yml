@@ -14,7 +14,9 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: mcpersist-fabric-modern
-          path: fabric/build/libs/*-modern.jar
+          path: |
+            fabric/build/libs/*-modern.jar
+            !fabric/build/libs/*-dev-shadow-modern.jar
 
   smoke:
     needs: build
