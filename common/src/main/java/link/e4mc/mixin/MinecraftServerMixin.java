@@ -3,11 +3,16 @@ package link.e4mc.mixin;
 import link.e4mc.Agnos;
 import com.mojang.authlib.GameProfile;
 import link.e4mc.E4mcClient;
+import link.e4mc.QuiclimeSession;
 import link.e4mc.SessionPlayers;
 import link.e4mc.WorldPersistence;
 import link.e4mc.handoff.Handoff;
+import net.minecraft.network.chat.Component;
+import net.minecraft.network.protocol.common.ClientboundTransferPacket;
 import net.minecraft.server.MinecraftServer;
+import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.server.players.NameAndId;
+import net.minecraft.server.players.PlayerList;
 import net.minecraft.world.level.storage.LevelResource;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Shadow;
@@ -33,6 +38,12 @@ public abstract class MinecraftServerMixin implements SessionPlayers {
     @Shadow
     public abstract GameProfile getSingleplayerProfile();
 
+    @Shadow
+    public abstract PlayerList getPlayerList();
+
+    @Shadow
+    public abstract boolean isSingleplayerOwner(NameAndId player);
+
     @Override
     public Set<NameAndId> mcpersist$sessionPlayers() {
         return mcpersist$sessionPlayers;
@@ -40,6 +51,29 @@ public abstract class MinecraftServerMixin implements SessionPlayers {
 
     @Shadow
     public abstract Path getWorldPath(LevelResource resource);
+
+    /**
+     * Before the host's world stops, sends everyone else to its stable address, where the
+     * background server will pick them up (the relay holds them while it starts).
+     */
+    @Inject(method = "stopServer", at = @At("HEAD"))
+    private void mcpersist$transferPlayers(CallbackInfo ci) {
+        if (isDedicatedServer() || !WorldPersistence.isPersistent(getWorldPath(LevelResource.ROOT))) {
+            return;
+        }
+        QuiclimeSession session = E4mcClient.session;
+        String domain = session != null ? session.domain : null;
+        for (ServerPlayer player : getPlayerList().getPlayers()) {
+            if (isSingleplayerOwner(player.nameAndId())) {
+                continue;
+            }
+            if (domain != null) {
+                player.connection.send(new ClientboundTransferPacket(domain, 25565));
+            } else {
+                player.connection.disconnect(Component.translatable("text.mcpersist.movingToBackground"));
+            }
+        }
+    }
 
     // At the end of stopServer the world is saved and its storage (and session.lock) closed.
     @Inject(method = "stopServer", at = @At("TAIL"))

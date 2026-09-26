@@ -186,6 +186,8 @@ public class QuiclimeSession {
 
     private DialtoneServerChannel dialtoneChannel;
     final String worldKey;
+    /** The address the relay assigned, once assigned. */
+    public volatile String domain;
 
     /** {@code worldKey} is the world's key if it's persistent, else null. */
     public QuiclimeSession(ChannelHandler handler, EventLoopGroup group, String worldKey) {
@@ -329,6 +331,7 @@ public class QuiclimeSession {
                                             LOGGER.warn("e4mc running on Dedicated Server; This works, but isn't recommended as e4mc is designed for short-lived LAN servers");
                                         }
                                         String domain = ((ControlMessageCodec.DomainAssignmentCompleteMessageClientbound) msg).domain;
+                                        QuiclimeSession.this.domain = domain;
                                         LOGGER.info("Domain assigned: {}", domain);
                                         if (Agnos.isClient()) {
                                             Component domainComponent = Mirror.literal(domain);
