@@ -27,9 +27,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          prerelease=""
-          case "$VERSION" in *alpha*|*beta*|*rc*) prerelease="--prerelease" ;; esac
-          gh release create "$GITHUB_REF_NAME" "$JAR" --title "MCPersist $VERSION" --generate-notes $prerelease
+          # Not marked pre-release, so the newest v2 build is "Latest" rather than v1's last release.
+          # Modrinth still labels it alpha or beta from the version.
+          gh release create "$GITHUB_REF_NAME" "$JAR" --title "MCPersist $VERSION" --generate-notes --latest
       # Needs the MODRINTH_TOKEN secret and MODRINTH_PROJECT_ID variable; skipped until they exist.
       - name: Modrinth
         if: env.MODRINTH_TOKEN != '' && vars.MODRINTH_PROJECT_ID != ''
