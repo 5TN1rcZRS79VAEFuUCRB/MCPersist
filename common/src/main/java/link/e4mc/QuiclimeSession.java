@@ -355,9 +355,6 @@ public class QuiclimeSession {
                                                                 .withClickEvent(new ClickEvent.SuggestCommand("/whitelist add "))
                                                                 .withColor(ChatFormatting.YELLOW))));
                                             }
-                                            if (E4mcClient.badurl) {
-                                                addMessage(Component.translatable("text.e4mc_minecraft.poisonpill.badurl"));
-                                            }
                                         }
                                     }
                                     if (msg instanceof ControlMessageCodec.RequestMessageBroadcastMessageClientbound) {

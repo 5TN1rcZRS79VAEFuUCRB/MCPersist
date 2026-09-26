@@ -15,18 +15,8 @@ public class E4mcClient {
     public static QuiclimeSession session;
     public static final Logger LOGGER = LoggerFactory.getLogger(E4mcClient.MOD_ID);
 
-    public static boolean badurl = false;
-
     public static void init() {
         Config.INSTANCE.id(); // Touch to initialize for McQoy
-        try {
-            if (!PoisonPill.checkMotw()) {
-                badurl = true;
-                LOGGER.warn("MotW lists unknown source! Poison pill active!");
-            }
-        } catch (Exception e) {
-            LOGGER.warn("MotW check failed!", e);
-        }
     }
 
     public static void registerCommands(CommandDispatcher<CommandSourceStack> dispatcher) {
