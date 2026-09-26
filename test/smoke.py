@@ -10,6 +10,7 @@ With $MCPERSIST_RELAY set to an mcpersist-relay binary, also checks world addres
 a local relay (needs openssl and keytool on PATH).
 """
 
+import faulthandler
 import json
 import os
 import queue
@@ -292,7 +293,7 @@ def hand_off(cache, game, world, servers):
          "--servers", str(servers), "--minecraft", MINECRAFT_VERSION,
          "--loader", (cache / "loader.txt").read_text(), "--xmx", "768M",
          "--host", f"{HOST[0]}:{HOST[1]}", "--players", f"{FRIEND[0]}:{FRIEND[1]}"],
-        capture_output=True, text=True,
+        capture_output=True, text=True, timeout=300,
     )
 
 
@@ -389,6 +390,8 @@ def check_server_folder(server_dir, world):
 
 
 def main():
+    # If a run hangs, show where every thread is stuck.
+    faulthandler.dump_traceback_later(900, repeat=True)
     mod_jar = Path(sys.argv[1]).resolve()
     with tempfile.TemporaryDirectory() as tmp:
         cache = Path(tmp)
