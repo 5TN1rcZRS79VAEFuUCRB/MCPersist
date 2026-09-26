@@ -31,13 +31,16 @@ public final class BackgroundServers {
         return Handoff.isRunning(serversDir(), worldDir(levelId));
     }
 
+    /** The server entry of the background server last joined from the world list. */
+    public static volatile ServerData joined;
+
     /** Joins the world's background server instead of opening it in singleplayer. */
     public static void join(Screen parent, String levelId, String worldName) throws IOException {
         int port = Handoff.localPort(serversDir(), worldDir(levelId));
         String address = "127.0.0.1:" + port;
         Minecraft minecraft = Minecraft.getInstance();
-        ConnectScreen.startConnecting(parent, minecraft, new ServerAddress("127.0.0.1", port),
-                new ServerData(worldName, address, ServerData.Type.OTHER), false, null);
+        joined = new ServerData(worldName, address, ServerData.Type.OTHER);
+        ConnectScreen.startConnecting(parent, minecraft, new ServerAddress("127.0.0.1", port), joined, false, null);
     }
 
     /** Stops the world's background server off the render thread, then runs {@code then} on it. */

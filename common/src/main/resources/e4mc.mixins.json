@@ -22,6 +22,7 @@
     "EditWorldScreenMixin",
     "IntegratedServerMixin",
     "LevelSummaryMixin",
+    "MinecraftMixin",
     "PlayerListMixin",
     "SelectWorldScreenMixin",
     "ServerAddressMixin",
