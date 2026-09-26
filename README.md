@@ -1,5 +1,10 @@
 # MCPersist
 
+> **MCPersist v1 is discontinued, and its relay has been shut down, so v1 servers can no longer be
+> reached at their addresses.** MCPersist is now a Fabric mod: see the
+> [main branch](https://github.com/5TN1rcZRS79VAEFuUCRB/MCPersist) for v2. This branch is kept for
+> reference only.
+
 A tool for turning a singleplayer Minecraft world into a real standalone dedicated
 server, running independently of the game client, with a **persistent** join address
 (via a relay - see [`relay/`](relay/)) that stays the same across restarts. Inspired
