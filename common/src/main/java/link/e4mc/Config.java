@@ -22,7 +22,8 @@ public class Config extends ReflectiveConfig {
     @Comment("Allows use of certain dedicated server commands such as /ban and /whitelist")
     public final TrackedValue<Boolean> restoreDedicatedCommands = this.value(true);
     @Comment("Whether to use whitelists on LAN worlds")
-    public final TrackedValue<Boolean> useWhiteList = this.value(false);
+    // On: a world's address stays the same across sessions, so anyone who learns it could come back.
+    public final TrackedValue<Boolean> useWhiteList = this.value(true);
 
     @Comment("Whether to enable sharing LAN worlds with e4mc")
     public final TrackedValue<Boolean> hostEnabled = this.value(true);
