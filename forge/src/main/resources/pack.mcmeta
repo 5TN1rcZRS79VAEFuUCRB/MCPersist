@@ -1,0 +1,7 @@
+{
+  "pack": {
+    "description": "MCPersist resources",
+    "min_format": 97,
+    "max_format": 121
+  }
+}

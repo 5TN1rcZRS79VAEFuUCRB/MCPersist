@@ -31,6 +31,7 @@ import net.minecraft.network.chat.MutableComponent;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.net.Inet6Address;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.URI;
@@ -240,6 +241,7 @@ public class QuiclimeSession {
             String relayHost = Config.INSTANCE.relayHost.value();
             int relayPort = Config.INSTANCE.relayPort.value();
             LOGGER.info("using relay {}:{}", relayHost, relayPort);
+            InetAddress relay = InetAddress.getByName(relayHost);
             QuicSslContext context = QuicSslContextBuilder
                     .forClient()
                     .applicationProtocols("quiclime")
@@ -276,7 +278,9 @@ public class QuiclimeSession {
                     .group(group)
                     .channel(channelClass)
                     .handler(codec)
-                    .bind(0)
+                    // The relay's own family: Forge and NeoForge switch a server bound to an IPv4
+                    // address to IPv4-only sockets, where the default IPv6 wildcard can't bind.
+                    .bind(new InetSocketAddress(relay instanceof Inet6Address ? "::" : "0.0.0.0", 0))
                     .addListener(datagramChannelFuture -> {
                 if (!datagramChannelFuture.isSuccess()) {
                     fail(datagramChannelFuture.cause());
@@ -298,7 +302,7 @@ public class QuiclimeSession {
                                 state = State.STOPPED;
                             }
                         })
-                        .remoteAddress(new InetSocketAddress(InetAddress.getByName(relayHost), relayPort))
+                        .remoteAddress(new InetSocketAddress(relay, relayPort))
                         .connect()
                         .addListener(quicChannelFuture -> {
                     if (!quicChannelFuture.isSuccess()) {

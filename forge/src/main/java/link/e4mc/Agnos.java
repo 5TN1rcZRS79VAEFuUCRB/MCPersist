@@ -27,6 +27,11 @@ public class Agnos {
         return ModList.getModContainerById(modId).orElseThrow().getModInfo().getVersion().toString();
     }
 
+    /** The version of the loader itself, as its server installer names it. */
+    public static String loaderVersion() {
+        return modVersion("forge");
+    }
+
     public static Path jarPath() {
         return ModList.getModFileById(E4mcClient.MOD_ID).getFile().getFilePath();
     }

@@ -41,16 +41,25 @@ INSTALLERS = {
 LOADER = "fabric"
 
 
-def get_json(url):
+def fetch(url):
+    """The response body. Loader mavens fail now and then (timeouts, a brief 404), so retry."""
     request = urllib.request.Request(url, headers={"User-Agent": "mcpersist-smoke-test"})
-    with urllib.request.urlopen(request) as response:
-        return json.load(response)
+    for attempt in range(3):
+        try:
+            with urllib.request.urlopen(request, timeout=60) as response:
+                return response.read()
+        except OSError:
+            if attempt == 2:
+                raise
+            time.sleep(10)
+
+
+def get_json(url):
+    return json.loads(fetch(url))
 
 
 def download(url, dest):
-    request = urllib.request.Request(url, headers={"User-Agent": "mcpersist-smoke-test"})
-    with urllib.request.urlopen(request) as response, open(dest, "wb") as out:
-        shutil.copyfileobj(response, out)
+    Path(dest).write_bytes(fetch(url))
 
 
 def free_port():
@@ -62,14 +71,24 @@ def free_port():
 GSON_JAR = "https://repo1.maven.org/maven2/com/google/code/gson/gson/2.11.0/gson-2.11.0.jar"
 
 
+def add_mod(mods, name, metadata):
+    """A tiny mod jar for this loader, from its metadata: a dict for Fabric, TOML otherwise."""
+    with zipfile.ZipFile(mods / name, "w") as jar:
+        if LOADER == "fabric":
+            jar.writestr("fabric.mod.json", json.dumps({"schemaVersion": 1, "version": "1", **metadata}))
+        else:
+            path = "META-INF/neoforge.mods.toml" if LOADER == "neoforge" else "META-INF/mods.toml"
+            jar.writestr(path, f'modLoader = "javafml"\nloaderVersion = "*"\nlicense = "MIT"\n{metadata}')
+
+
 def download_server(cache, mod_jar):
     shutil.copy(mod_jar, cache / "mod.jar")
+    download(GSON_JAR, cache / "gson.jar")
     if LOADER in INSTALLERS:
         install_server(cache)
         return
     loader = get_json(f"{FABRIC_META}/loader/{MINECRAFT_VERSION}")[0]["loader"]["version"]
     (cache / "loader.txt").write_text(loader)
-    download(GSON_JAR, cache / "gson.jar")
     installer = get_json(f"{FABRIC_META}/installer")[0]["version"]
     download(f"{FABRIC_META}/loader/{MINECRAFT_VERSION}/{loader}/{installer}/server/jar", cache / "server.jar")
     query = urllib.parse.urlencode({"game_versions": f'["{MINECRAFT_VERSION}"]', "loaders": '["fabric"]'})
@@ -79,10 +98,9 @@ def download_server(cache, mod_jar):
 
 def install_server(cache):
     maven, versions = INSTALLERS[LOADER]
-    request = urllib.request.Request(f"{maven}/maven-metadata.xml", headers={"User-Agent": "mcpersist-smoke-test"})
-    with urllib.request.urlopen(request) as response:
-        version = re.findall(rf"<version>({versions})</version>", response.read().decode())[-1]
-    (cache / "loader.txt").write_text(version)
+    version = re.findall(rf"<version>({versions})</version>", fetch(f"{maven}/maven-metadata.xml").decode())[-1]
+    # The loader's own version, as the game reports it: Forge's drops the "<minecraft>-".
+    (cache / "loader.txt").write_text(version.split("-", 1)[1] if LOADER == "forge" else version)
     download(f"{maven}/{version}/{LOADER}-{version}-installer.jar", cache / "installer.jar")
     subprocess.run([os.environ.get("JAVA", "java"), "-jar", "installer.jar", "--installServer", "installed-server"],
                    cwd=cache, check=True, stdout=subprocess.DEVNULL)
@@ -407,7 +425,7 @@ def hand_off(cache, game, world, servers):
         [*handoff_jvm(cache),
          "--world", str(world), "--mods", str(game / "mods"), "--config", str(game / "config"),
          "--servers", str(servers), "--minecraft", MINECRAFT_VERSION,
-         "--loader", (cache / "loader.txt").read_text(), "--xmx", "768M",
+         "--loader", LOADER, "--loader-version", (cache / "loader.txt").read_text(), "--xmx", "768M",
          "--host", f"{HOST[0]}:{HOST[1]}", "--players", f"{FRIEND[0]}:{FRIEND[1]},{REMOVED[0]}:{REMOVED[1]}",
          "--whitelist", str(game / "whitelist.json")],
         capture_output=True, text=True, timeout=300, env=handoff_env(),
@@ -435,10 +453,13 @@ def test_handoff(cache, relay_bin):
             (world / "players" / "data" / f"{NIL_UUID}.dat").write_bytes(b"host inventory")
             (game / "mods").mkdir()
             shutil.copy(cache / "mod.jar", game / "mods" / "mcpersist.jar")
-            shutil.copy(cache / "fabric-api.jar", game / "mods")
-            with zipfile.ZipFile(game / "mods" / "client-only.jar", "w") as jar:
-                jar.writestr("fabric.mod.json", json.dumps(
-                    {"schemaVersion": 1, "id": "clientonly", "version": "1", "environment": "client"}))
+            if LOADER == "fabric":
+                shutil.copy(cache / "fabric-api.jar", game / "mods")
+                add_mod(game / "mods", "client-only.jar", {"id": "clientonly", "environment": "client"})
+            elif LOADER == "forge":
+                add_mod(game / "mods", "client-only.jar",
+                        'clientSideOnly = true\n[[mods]]\nmodId = "clientonly"\nversion = "1"\n')
+            # NeoForge has no way to mark a mod client-only.
             (game / "config" / "mcpersist").mkdir(parents=True)
             (game / "config" / "mcpersist" / "mcpersist.toml").write_text(mod_config)
             servers = game / "mcpersist" / "servers"
@@ -510,11 +531,18 @@ def test_failed_start(cache):
         (world / "mcpersist.properties").write_text("persistent=true\nkey=smoke-test-crash-key-0123456789\n")
         (game / "mods").mkdir()
         shutil.copy(cache / "mod.jar", game / "mods" / "mcpersist.jar")
-        shutil.copy(cache / "fabric-api.jar", game / "mods")
-        with zipfile.ZipFile(game / "mods" / "crashes.jar", "w") as jar:
-            jar.writestr("fabric.mod.json", json.dumps({
-                "schemaVersion": 1, "id": "crashes", "version": "1", "environment": "*",
-                "entrypoints": {"main": ["does.not.Exist"]}}))
+        if LOADER == "fabric":
+            shutil.copy(cache / "fabric-api.jar", game / "mods")
+            add_mod(game / "mods", "crashes.jar",
+                    {"id": "crashes", "environment": "*", "entrypoints": {"main": ["does.not.Exist"]}})
+        elif LOADER == "forge":
+            # Declares a mod whose code is missing, which stops Forge.
+            add_mod(game / "mods", "crashes.jar", '[[mods]]\nmodId = "crashes"\nversion = "1"\n')
+        else:
+            # NeoForge allows mods without code; a missing required mod stops it.
+            add_mod(game / "mods", "crashes.jar", '[[mods]]\nmodId = "crashes"\nversion = "1"\n'
+                    '[[dependencies.crashes]]\nmodId = "does_not_exist"\ntype = "required"\n'
+                    'versionRange = "[1,)"\nside = "BOTH"\n')
         (game / "config" / "mcpersist").mkdir(parents=True)
         (game / "config" / "mcpersist" / "mcpersist.toml").write_text("hostEnabled = false\n")
         servers = game / "mcpersist" / "servers"
@@ -574,7 +602,7 @@ def check_autostart(cache, world, servers, server_dir, console):
 
 def check_server_folder(server_dir, world):
     mods = sorted(p.name for p in (server_dir / "mods").glob("*.jar"))
-    if "client-only.jar" in mods or "mcpersist.jar" not in mods or "fabric-api.jar" not in mods:
+    if "client-only.jar" in mods or "mcpersist.jar" not in mods or LOADER == "fabric" and "fabric-api.jar" not in mods:
         fail(f"wrong server mods: {mods}")
     props = {}
     for line in (server_dir / "server.properties").read_text().splitlines():
@@ -618,11 +646,8 @@ def main():
             test_relayed_leave(cache, relay_bin)
         else:
             print("SKIP: stable-address check (set MCPERSIST_RELAY to an mcpersist-relay binary)")
-        if LOADER == "fabric":
-            test_handoff(cache, relay_bin)
-            test_failed_start(cache)
-        else:
-            print(f"SKIP: background servers on {LOADER} (#22, #24)")
+        test_handoff(cache, relay_bin)
+        test_failed_start(cache)
 
 
 if __name__ == "__main__":

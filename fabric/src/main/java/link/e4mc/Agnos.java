@@ -25,6 +25,11 @@ public class Agnos {
         return FabricLoader.getInstance().getModContainer(modId).orElseThrow().getMetadata().getVersion().getFriendlyString();
     }
 
+    /** The version of the loader itself, as its server installer names it. */
+    public static String loaderVersion() {
+        return modVersion("fabricloader");
+    }
+
     public static Path jarPath() {
         return FabricLoader.getInstance().getModContainer(E4mcClient.MOD_ID).get().getOrigin().getPaths().get(0);
     }

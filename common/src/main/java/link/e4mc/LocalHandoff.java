@@ -9,9 +9,6 @@ import java.util.List;
 
 /** Hands this game's worlds to background servers using this game's own setup. */
 public final class LocalHandoff {
-    // ponytail: Fabric only until Handoff can install NeoForge and Forge servers (#22, #24).
-    public static final boolean SUPPORTED = Agnos.LOADER.equals("fabric");
-
     private LocalHandoff() {}
 
     public static Path serversDir() {
@@ -27,7 +24,8 @@ public final class LocalHandoff {
                 Agnos.configDir(),
                 serversDir(),
                 Agnos.modVersion("minecraft"),
-                Agnos.modVersion("fabricloader"),
+                Agnos.LOADER,
+                Agnos.loaderVersion(),
                 ProcessHandle.current().info().command().map(Path::of).orElseThrow(),
                 maxHeap(),
                 host,
