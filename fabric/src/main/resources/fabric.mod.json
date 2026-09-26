@@ -15,7 +15,7 @@
     "sources": "https://github.com/5TN1rcZRS79VAEFuUCRB/MCPersist"
   },
   "license": "MIT",
-  "icon": "e4mc_icon.png",
+  "icon": "mcpersist_icon.png",
   "environment": "*",
   "entrypoints": {
     "main": [
