@@ -16,7 +16,7 @@ public class Config extends ReflectiveConfig {
 
     // The MCPersist relay: persistent worlds keep their address only on a relay that
     // stores world keys, which e4mc's relays don't.
-    public final TrackedValue<String> relayHost = this.value("relay.v2.mcpersist.com");
+    public final TrackedValue<String> relayHost = this.value("relay.mcpersist.com");
     public final TrackedValue<Integer> relayPort = this.value(25575);
 
     @Comment("Allows use of certain dedicated server commands such as /ban and /whitelist")
@@ -30,8 +30,9 @@ public class Config extends ReflectiveConfig {
     public final TrackedValue<Boolean> dialtoneHostEnabled = this.value(true);
     @Comment("Whether to enable Dialtone peer-to-peer connections as the player")
     public final TrackedValue<Boolean> dialtonePlayerEnabled = this.value(true);
+    // Our own iroh relays, so peer-to-peer connections don't depend on e4mc's servers.
     @Comment("The URL to get the list of Iroh relays to use")
-    public final TrackedValue<String> dialtoneRelayMap = this.value("https://natives.e4mc.link/relaymap.json");
+    public final TrackedValue<String> dialtoneRelayMap = this.value("https://mcpersist.com/relaymap.json");
     @Comment("Whether to hide direct IP addresses from the relay")
     public final TrackedValue<Boolean> dialtoneSanitizeTicket = this.value(true);
 }

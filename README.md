@@ -7,10 +7,19 @@ e4mc, it puts your LAN world on the internet at an address your friends can join
 It also lets you mark a world as persistent. When you leave that world, or close the game, it keeps running
 as a headless server in the background on your machine, and it keeps the same address every time.
 
-> **Status: early development.** Right now this is a renamed e4mc fork built for Minecraft 26.3. The persistence features are tracked in the
-> [v2 spec](https://github.com/5TN1rcZRS79VAEFuUCRB/persistent-e4mc/issues/1).
+> **Status: alpha.** Built for Minecraft 26.3. Expect rough edges.
 
-Looking for MCPersist v1, the Windows app? It lives on the [`v1` branch](../../tree/v1).
+## Joining a world
+
+Anyone can join with an unmodded client: they just type the world's address. Their connection is carried
+by the MCPersist relay, which adds a bit of latency.
+
+**Players should install MCPersist too if they can.** With the mod, a player connects to the world
+peer-to-peer instead of through the relay, which is usually faster and more stable. This works the same
+whether the host is playing or the world is running in the background.
+
+MCPersist v1, the Windows app, is discontinued and its relay is shut down. Its code is kept on the
+[`v1` branch](../../tree/v1).
 
 ## Requirements
 
