@@ -278,6 +278,11 @@ def wait_in_file(path, text, timeout):
     fail(f"never saw {text!r} in {path}")
 
 
+HOST = ("11111111-2222-3333-4444-555555555555", "SmokeHost")
+FRIEND = ("66666666-7777-8888-9999-000000000000", "SmokeFriend")
+NIL_UUID = "00000000-0000-0000-0000-000000000000"
+
+
 def hand_off(cache, game, world, servers):
     """Runs the handoff entry point as the mod would, without a game window."""
     classpath = os.pathsep.join([str(cache / "mod.jar"), str(cache / "gson.jar")])
@@ -285,7 +290,8 @@ def hand_off(cache, game, world, servers):
         [os.environ.get("JAVA", "java"), "-cp", classpath, "link.e4mc.handoff.Handoff",
          "--world", str(world), "--mods", str(game / "mods"), "--config", str(game / "config"),
          "--servers", str(servers), "--minecraft", MINECRAFT_VERSION,
-         "--loader", (cache / "loader.txt").read_text(), "--xmx", "768M"],
+         "--loader", (cache / "loader.txt").read_text(), "--xmx", "768M",
+         "--host", f"{HOST[0]}:{HOST[1]}", "--players", f"{FRIEND[0]}:{FRIEND[1]}"],
         capture_output=True, text=True,
     )
 
@@ -306,6 +312,9 @@ def test_handoff(cache, relay_bin):
             world = game / "saves" / "Handoff World"
             world.mkdir(parents=True)
             (world / "mcpersist.properties").write_text("persistent=true\nkey=smoke-test-handoff-key-0123456789\n")
+            # A migrated world that stored the host under the all-zeros UUID.
+            (world / "players" / "data").mkdir(parents=True)
+            (world / "players" / "data" / f"{NIL_UUID}.dat").write_bytes(b"host inventory")
             (game / "mods").mkdir()
             shutil.copy(cache / "mod.jar", game / "mods" / "mcpersist.jar")
             shutil.copy(cache / "fabric-api.jar", game / "mods")
@@ -322,6 +331,9 @@ def test_handoff(cache, relay_bin):
                 if result.returncode != 0:
                     fail(f"handoff failed: {result.stderr}")
                 server_dir = Path(result.stdout.strip().splitlines()[-1])
+                host_data = world / "players" / "data" / f"{HOST[0]}.dat"
+                if not host_data.exists() or host_data.read_bytes() != b"host inventory":
+                    fail("host player data under the all-zeros UUID was not recovered")
                 if server_dir != servers / world.name:
                     fail(f"unexpected server folder {server_dir}")
                 pid = int((server_dir / "mcpersist.pid").read_text())
@@ -345,7 +357,7 @@ def test_handoff(cache, relay_bin):
             os.environ.pop("JAVA_TOOL_OPTIONS", None)
             if relay:
                 relay.kill()
-    print("PASS: handoff ran the world in place in a detached server"
+    print("PASS: handoff ran the world in place in a detached server, whitelisted and with the host as op"
           + (f" at {domains[0]} both times" if relay else ""))
 
 
@@ -359,8 +371,16 @@ def check_server_folder(server_dir, world):
             key, value = line.split("=", 1)
             props[key] = re.sub(r"\\(.)", r"\1", value)  # undo java.util.Properties escaping
     expected_level = str(world.absolute()).replace(os.sep, "/")
-    if props.get("level-name") != expected_level or props.get("accepts-transfers") != "true":
+    expected = {"level-name": expected_level, "accepts-transfers": "true", "server-ip": "127.0.0.1",
+                "white-list": "true", "enforce-whitelist": "true", "online-mode": "true"}
+    if any(props.get(key) != value for key, value in expected.items()):
         fail(f"wrong server.properties: {props}")
+    whitelist = {(e["uuid"], e["name"]) for e in json.loads((server_dir / "whitelist.json").read_text())}
+    if whitelist != {HOST, FRIEND}:
+        fail(f"wrong whitelist: {whitelist}")
+    ops = json.loads((server_dir / "ops.json").read_text())
+    if [(e["uuid"], e["name"], e["level"]) for e in ops] != [(*HOST, 4)]:
+        fail(f"wrong ops: {ops}")
     launch = (server_dir / "mcpersist-launch.txt").read_text().splitlines()
     if "-Xmx768M" not in launch:
         fail(f"server not launched with the game's -Xmx: {launch}")

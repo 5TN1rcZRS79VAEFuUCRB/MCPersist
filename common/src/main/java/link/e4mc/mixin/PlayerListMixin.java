@@ -4,8 +4,12 @@ import com.mojang.authlib.GameProfile;
 import link.e4mc.Config;
 import link.e4mc.E4mcClient;
 import link.e4mc.Mirror;
+import link.e4mc.SessionPlayers;
+import net.minecraft.network.Connection;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.MinecraftServer;
+import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.server.network.CommonListenerCookie;
 import net.minecraft.server.players.PlayerList;
 import net.minecraft.server.players.UserBanList;
 import net.minecraft.server.players.UserWhiteList;
@@ -43,6 +47,12 @@ public abstract class PlayerListMixin {
                 E4mcClient.LOGGER.warn("Failed to load whitelist: ", e);
             }
         }
+    }
+
+    /** Everyone who plays during the host's session is whitelisted on the background server. */
+    @Inject(method = "placeNewPlayer", at = @At("TAIL"))
+    void mcpersist$recordJoin(Connection connection, ServerPlayer player, CommonListenerCookie cookie, CallbackInfo ci) {
+        ((SessionPlayers) getServer()).mcpersist$sessionPlayers().add(player.nameAndId());
     }
 
     @Inject(method = "/^(canPlayerLogin|method_14586|checkCanJoin|m_6418_)$/", at = @At("HEAD"), cancellable = true)

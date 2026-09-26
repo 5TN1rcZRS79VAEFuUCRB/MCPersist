@@ -24,8 +24,12 @@ import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Properties;
+import java.util.UUID;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 
@@ -41,6 +45,9 @@ public final class Handoff {
     static final String LAUNCH_FILE = "mcpersist-launch.txt";
     static final String PID_FILE = "mcpersist.pid";
     private static final Gson GSON = new Gson();
+    private static final UUID NIL = new UUID(0, 0);
+
+    public record Player(UUID id, String name) {}
 
     /**
      * @param worldDir        the world, in the client's saves folder
@@ -49,9 +56,12 @@ public final class Handoff {
      * @param serversDir      where per-world server folders live
      * @param java            the Java executable to run the server with
      * @param maxHeap         the -Xmx value, e.g. "4G"
+     * @param host            the world's owner: whitelisted, op level 4
+     * @param players         everyone who joined while the host played: whitelisted
      */
     public record Spec(Path worldDir, Path clientModsDir, Path clientConfigDir, Path serversDir,
-                       String minecraftVersion, String loaderVersion, Path java, String maxHeap) {}
+                       String minecraftVersion, String loaderVersion, Path java, String maxHeap,
+                       Player host, List<Player> players) {}
 
     private Handoff() {}
 
@@ -73,6 +83,8 @@ public final class Handoff {
         // The host turned persistence on for this world, which runs it as a Minecraft server.
         Files.writeString(dir.resolve("eula.txt"), "eula=true\n");
         writeServerProperties(dir, spec.worldDir());
+        writeAccessLists(dir, spec.host(), spec.players());
+        recoverHostPlayerData(spec.worldDir(), spec.host());
 
         List<String> command = List.of(spec.java().toString(), "-Xmx" + spec.maxHeap(), "-jar", SERVER_JAR, "nogui");
         Files.write(dir.resolve(LAUNCH_FILE), command);
@@ -171,8 +183,67 @@ public final class Handoff {
         // Players arrive through the relay; the local port is only for the host's own client.
         props.setProperty("server-ip", "127.0.0.1");
         props.setProperty("server-port", Integer.toString(freePort()));
+        // A stable address gets found; only the host and their friends may join.
+        props.setProperty("white-list", "true");
+        props.setProperty("enforce-whitelist", "true");
+        props.setProperty("online-mode", "true");
         try (OutputStream out = Files.newOutputStream(file)) {
             props.store(out, "Written by MCPersist; level-name, accepts-transfers, server-ip and server-port are managed");
+        }
+    }
+
+    /** Adds the session's players to the whitelist and the host as op, keeping existing entries. */
+    private static void writeAccessLists(Path dir, Player host, List<Player> players) throws IOException {
+        Map<UUID, JsonObject> whitelist = readList(dir.resolve("whitelist.json"));
+        List<Player> allowed = new ArrayList<>(players);
+        allowed.add(host);
+        for (Player player : allowed) {
+            whitelist.putIfAbsent(player.id(), entry(player));
+        }
+        writeList(dir.resolve("whitelist.json"), whitelist);
+
+        Map<UUID, JsonObject> ops = readList(dir.resolve("ops.json"));
+        JsonObject op = entry(host);
+        op.addProperty("level", 4);
+        op.addProperty("bypassesPlayerLimit", false);
+        ops.put(host.id(), op);
+        writeList(dir.resolve("ops.json"), ops);
+    }
+
+    private static JsonObject entry(Player player) {
+        JsonObject entry = new JsonObject();
+        entry.addProperty("uuid", player.id().toString());
+        entry.addProperty("name", player.name());
+        return entry;
+    }
+
+    private static Map<UUID, JsonObject> readList(Path file) throws IOException {
+        Map<UUID, JsonObject> entries = new LinkedHashMap<>();
+        if (Files.exists(file)) {
+            for (var element : GSON.fromJson(Files.readString(file), JsonArray.class)) {
+                JsonObject entry = element.getAsJsonObject();
+                entries.put(UUID.fromString(entry.get("uuid").getAsString()), entry);
+            }
+        }
+        return entries;
+    }
+
+    private static void writeList(Path file, Map<UUID, JsonObject> entries) throws IOException {
+        JsonArray array = new JsonArray();
+        entries.values().forEach(array::add);
+        Files.writeString(file, GSON.toJson(array));
+    }
+
+    /**
+     * A world migrated from an old save can hold the host's player under the all-zeros UUID,
+     * which a dedicated server never loads: the host would arrive with an empty inventory.
+     */
+    static void recoverHostPlayerData(Path worldDir, Player host) throws IOException {
+        Path data = worldDir.resolve("players").resolve("data");
+        Path hostFile = data.resolve(host.id() + ".dat");
+        Path nilFile = data.resolve(NIL + ".dat");
+        if (!Files.exists(hostFile) && Files.exists(nilFile)) {
+            Files.copy(nilFile, hostFile);
         }
     }
 
@@ -225,7 +296,8 @@ public final class Handoff {
 
     /**
      * Command-line entry point, for tests: {@code --world --mods --config --servers --minecraft
-     * --loader [--java] [--xmx]}. Prints the server folder once the server has been started.
+     * --loader --host uuid:name [--players uuid:name,...] [--java] [--xmx]}. Prints the server
+     * folder once the server has been started.
      */
     public static void main(String[] args) throws Exception {
         Properties options = new Properties();
@@ -243,7 +315,15 @@ public final class Handoff {
                 options.getProperty("minecraft"),
                 options.getProperty("loader"),
                 java,
-                options.getProperty("xmx", "1G")));
+                options.getProperty("xmx", "1G"),
+                player(options.getProperty("host")),
+                options.getProperty("players", "").isEmpty() ? List.of()
+                        : Arrays.stream(options.getProperty("players").split(",")).map(Handoff::player).toList()));
         System.out.println(dir);
+    }
+
+    private static Player player(String idAndName) {
+        String[] parts = idAndName.split(":", 2);
+        return new Player(UUID.fromString(parts[0]), parts[1]);
     }
 }

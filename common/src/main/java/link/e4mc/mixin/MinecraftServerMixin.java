@@ -1,25 +1,42 @@
 package link.e4mc.mixin;
 
 import link.e4mc.Agnos;
+import com.mojang.authlib.GameProfile;
 import link.e4mc.E4mcClient;
+import link.e4mc.SessionPlayers;
 import link.e4mc.WorldPersistence;
 import link.e4mc.handoff.Handoff;
 import net.minecraft.server.MinecraftServer;
+import net.minecraft.server.players.NameAndId;
 import net.minecraft.world.level.storage.LevelResource;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Shadow;
+import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
 import java.lang.management.ManagementFactory;
 import java.nio.file.Path;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 
 /** When the host leaves a persistent world, hands it to a background server. */
 @Mixin(MinecraftServer.class)
-public abstract class MinecraftServerMixin {
+public abstract class MinecraftServerMixin implements SessionPlayers {
+    @Unique
+    private final Set<NameAndId> mcpersist$sessionPlayers = ConcurrentHashMap.newKeySet();
+
     @Shadow
     public abstract boolean isDedicatedServer();
+
+    @Shadow
+    public abstract GameProfile getSingleplayerProfile();
+
+    @Override
+    public Set<NameAndId> mcpersist$sessionPlayers() {
+        return mcpersist$sessionPlayers;
+    }
 
     @Shadow
     public abstract Path getWorldPath(LevelResource resource);
@@ -31,9 +48,11 @@ public abstract class MinecraftServerMixin {
             return;
         }
         Path worldDir = getWorldPath(LevelResource.ROOT).toAbsolutePath().normalize();
-        if (!WorldPersistence.isPersistent(worldDir)) {
+        GameProfile owner = getSingleplayerProfile();
+        if (owner == null || !WorldPersistence.isPersistent(worldDir)) {
             return;
         }
+        NameAndId host = new NameAndId(owner);
         Path gameDir = Agnos.gameDir();
         Handoff.Spec spec = new Handoff.Spec(
                 worldDir,
@@ -43,7 +62,9 @@ public abstract class MinecraftServerMixin {
                 Agnos.modVersion("minecraft"),
                 Agnos.modVersion("fabricloader"),
                 ProcessHandle.current().info().command().map(Path::of).orElseThrow(),
-                maxHeap());
+                maxHeap(),
+                new Handoff.Player(host.id(), host.name()),
+                mcpersist$sessionPlayers.stream().map(p -> new Handoff.Player(p.id(), p.name())).toList());
         // Not a daemon: if the game is closing, the handoff still finishes.
         new Thread(() -> {
             try {
