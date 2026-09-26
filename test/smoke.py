@@ -1,10 +1,10 @@
-"""Seam 1 smoke test: runs a real headless Fabric server with the mod and checks it from outside.
+"""Seam 1 smoke test: runs a real headless server with the mod and checks it from outside.
 
-Usage: python test/smoke.py <path to mcpersist-fabric-*.jar>
+Usage: python test/smoke.py <path to mcpersist-fabric-*.jar or mcpersist-neoforge-*.jar>
 
 Needs Java for the target Minecraft version on PATH, or its path in $JAVA. Downloads the
-Fabric server launcher and Fabric API into a temporary directory. Accepts the Minecraft
-EULA for these throwaway servers.
+loader's server (and Fabric API for Fabric) into a temporary directory. Accepts the
+Minecraft EULA for these throwaway servers.
 
 With $MCPERSIST_RELAY set to an mcpersist-relay binary, also checks world addresses against
 a local relay (needs openssl and keytool on PATH).
@@ -32,6 +32,9 @@ from pathlib import Path
 
 MINECRAFT_VERSION = "26.3"
 FABRIC_META = "https://meta.fabricmc.net/v2/versions"
+NEOFORGE_MAVEN = "https://maven.neoforged.net/releases/net/neoforged/neoforge"
+# Which loader the mod jar is for; set in main().
+LOADER = "fabric"
 
 
 def get_json(url):
@@ -56,6 +59,10 @@ GSON_JAR = "https://repo1.maven.org/maven2/com/google/code/gson/gson/2.11.0/gson
 
 
 def download_server(cache, mod_jar):
+    shutil.copy(mod_jar, cache / "mod.jar")
+    if LOADER == "neoforge":
+        download_neoforge(cache)
+        return
     loader = get_json(f"{FABRIC_META}/loader/{MINECRAFT_VERSION}")[0]["loader"]["version"]
     (cache / "loader.txt").write_text(loader)
     download(GSON_JAR, cache / "gson.jar")
@@ -64,13 +71,26 @@ def download_server(cache, mod_jar):
     query = urllib.parse.urlencode({"game_versions": f'["{MINECRAFT_VERSION}"]', "loaders": '["fabric"]'})
     versions = get_json(f"https://api.modrinth.com/v2/project/fabric-api/version?{query}")
     download(versions[0]["files"][0]["url"], cache / "fabric-api.jar")
-    shutil.copy(mod_jar, cache / "mod.jar")
+
+
+def download_neoforge(cache):
+    request = urllib.request.Request(f"{NEOFORGE_MAVEN}/maven-metadata.xml", headers={"User-Agent": "mcpersist-smoke-test"})
+    with urllib.request.urlopen(request) as response:
+        version = re.findall(rf"<version>({re.escape(MINECRAFT_VERSION)}\.[^<]+)</version>", response.read().decode())[-1]
+    (cache / "loader.txt").write_text(version)
+    download(f"{NEOFORGE_MAVEN}/{version}/neoforge-{version}-installer.jar", cache / "installer.jar")
+    subprocess.run([os.environ.get("JAVA", "java"), "-jar", "installer.jar", "--installServer", "neoforge-server"],
+                   cwd=cache, check=True, stdout=subprocess.DEVNULL)
 
 
 def prepare_server(root, cache, mod_config):
-    shutil.copy(cache / "server.jar", root)
-    (root / "mods").mkdir()
-    shutil.copy(cache / "fabric-api.jar", root / "mods")
+    if LOADER == "neoforge":
+        shutil.copytree(cache / "neoforge-server", root, dirs_exist_ok=True)
+    else:
+        shutil.copy(cache / "server.jar", root)
+    (root / "mods").mkdir(exist_ok=True)
+    if LOADER == "fabric":
+        shutil.copy(cache / "fabric-api.jar", root / "mods")
     shutil.copy(cache / "mod.jar", root / "mods")
     (root / "eula.txt").write_text("eula=true\n")
     (root / "server.properties").write_text(
@@ -84,8 +104,13 @@ class Server:
     def __init__(self, root, jvm_args=()):
         self.log = []
         self.lines = queue.Queue()
+        launch = ["-jar", "server.jar"]
+        if LOADER == "neoforge":
+            # The installer writes the launch arguments to a file under libraries/.
+            args = "win_args.txt" if os.name == "nt" else "unix_args.txt"
+            launch = ["@" + str(next(Path(root).glob(f"libraries/net/neoforged/neoforge/*/{args}")).relative_to(root))]
         self.process = subprocess.Popen(
-            [os.environ.get("JAVA", "java"), "-Xmx1G", *jvm_args, "-jar", "server.jar", "nogui"],
+            [os.environ.get("JAVA", "java"), "-Xmx1G", *jvm_args, *launch, "nogui"],
             cwd=root,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
@@ -166,7 +191,7 @@ def start_relay(relay_bin, root):
     subprocess.run(
         ["openssl", "req", "-x509", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:prime256v1", "-nodes",
          "-keyout", root / "key.pem", "-out", root / "cert.pem", "-days", "1",
-         "-subj", "/CN=localhost", "-addext", "subjectAltName=DNS:localhost"],
+         "-subj", "/CN=localhost", "-addext", "subjectAltName=DNS:localhost,IP:127.0.0.1"],
         check=True, capture_output=True,
     )
     # The JDK's own CAs plus the relay's certificate: the server still downloads over HTTPS.
@@ -202,7 +227,8 @@ def start_relay(relay_bin, root):
     relay = subprocess.Popen([relay_bin], env=env)
     jvm_args = [f"-Djavax.net.ssl.trustStore={root / 'trust.p12'}", "-Djavax.net.ssl.trustStorePassword=changeit"]
     mod_config = (
-        'relayHost = "localhost"\n'
+        # An IP, not "localhost": NeoForge's launch prefers IPv6, which the relay doesn't listen on.
+        'relayHost = "127.0.0.1"\n'
         f"relayPort = {quic_port}\n"
         "dialtoneHostEnabled = false\n"
     )
@@ -575,6 +601,8 @@ def main():
     # If a run hangs, show where every thread is stuck.
     faulthandler.dump_traceback_later(900, repeat=True)
     mod_jar = Path(sys.argv[1]).resolve()
+    global LOADER
+    LOADER = "neoforge" if "neoforge" in mod_jar.name else "fabric"
     with tempfile.TemporaryDirectory() as tmp:
         cache = Path(tmp)
         download_server(cache, mod_jar)
@@ -585,8 +613,11 @@ def main():
             test_relayed_leave(cache, relay_bin)
         else:
             print("SKIP: stable-address check (set MCPERSIST_RELAY to an mcpersist-relay binary)")
-        test_handoff(cache, relay_bin)
-        test_failed_start(cache)
+        if LOADER == "fabric":
+            test_handoff(cache, relay_bin)
+            test_failed_start(cache)
+        else:
+            print(f"SKIP: background servers on {LOADER} (#22, #24)")
 
 
 if __name__ == "__main__":

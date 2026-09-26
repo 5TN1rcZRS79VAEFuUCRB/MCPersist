@@ -72,7 +72,8 @@ public abstract class MinecraftServerMixin implements SessionPlayers {
     @Override
     public void mcpersist$markShared() {
         Path worldDir = getWorldPath(LevelResource.ROOT).toAbsolutePath().normalize();
-        if (isDedicatedServer() || mcpersist$shared || !WorldPersistence.isPersistent(worldDir)) {
+        // Never marked shared, a session isn't handed off when it ends.
+        if (isDedicatedServer() || !LocalHandoff.SUPPORTED || mcpersist$shared || !WorldPersistence.isPersistent(worldDir)) {
             return;
         }
         mcpersist$shared = true;

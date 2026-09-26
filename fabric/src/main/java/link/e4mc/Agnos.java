@@ -6,6 +6,8 @@ import net.fabricmc.loader.api.FabricLoader;
 import java.nio.file.Path;
 
 public class Agnos {
+    public static final String LOADER = "fabric";
+
     public static boolean isClient() {
         return FabricLoader.getInstance().getEnvironmentType().equals(EnvType.CLIENT);
     }

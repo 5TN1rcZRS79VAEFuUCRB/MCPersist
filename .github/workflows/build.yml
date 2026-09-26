@@ -10,31 +10,33 @@ jobs:
           distribution: temurin
           java-version: 25
       - uses: gradle/actions/setup-gradle@v4
-      - run: sh ./gradlew :fabric:build
+      - run: sh ./gradlew build
       - uses: actions/upload-artifact@v4
         with:
           name: mcpersist-fabric
           path: |
             fabric/build/libs/mcpersist-fabric-*.jar
             !fabric/build/libs/*-sources.jar
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mcpersist-neoforge
+          path: neoforge/build/libs/mcpersist-neoforge-*.jar
 
   smoke:
-    name: smoke (${{ matrix.name }})
+    name: smoke (${{ matrix.loader }}, ${{ matrix.os }})
     needs: build
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - { name: Linux, os: ubuntu-latest }
-          - { name: Windows, os: windows-latest }
-          - { name: macOS, os: macos-latest }
+        loader: [fabric, neoforge]
+        os: [ubuntu-latest, windows-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
-          name: mcpersist-fabric
+          name: mcpersist-${{ matrix.loader }}
           path: jar
       - uses: actions/setup-java@v4
         with:
@@ -49,4 +51,4 @@ jobs:
           cargo install --locked --git https://github.com/5TN1rcZRS79VAEFuUCRB/mcpersist-relay
           echo "MCPERSIST_RELAY=$HOME/.cargo/bin/mcpersist-relay" >> "$GITHUB_ENV"
       - shell: bash
-        run: python -u test/smoke.py jar/mcpersist-fabric-*.jar
+        run: python -u test/smoke.py jar/mcpersist-${{ matrix.loader }}-*.jar
