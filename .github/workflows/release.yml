@@ -1,0 +1,48 @@
+name: release
+on:
+  push:
+    tags: ["v*"]
+permissions:
+  contents: write
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    env:
+      MODRINTH_TOKEN: ${{ secrets.MODRINTH_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 25
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Build
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+          echo "MINECRAFT=$(grep '^minecraft_version=' gradle.properties | cut -d= -f2)" >> "$GITHUB_ENV"
+          sh ./gradlew :fabric:build -Pmod_version="$version"
+          echo "JAR=fabric/build/libs/mcpersist-fabric-$version.jar" >> "$GITHUB_ENV"
+      - name: GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          prerelease=""
+          case "$VERSION" in *alpha*|*beta*|*rc*) prerelease="--prerelease" ;; esac
+          gh release create "$GITHUB_REF_NAME" "$JAR" --title "MCPersist $VERSION" --generate-notes $prerelease
+      # Needs the MODRINTH_TOKEN secret and MODRINTH_PROJECT_ID variable; skipped until they exist.
+      - name: Modrinth
+        if: env.MODRINTH_TOKEN != '' && vars.MODRINTH_PROJECT_ID != ''
+        env:
+          PROJECT: ${{ vars.MODRINTH_PROJECT_ID }}
+        run: |
+          case "$VERSION" in *alpha*) type=alpha ;; *beta*|*rc*) type=beta ;; *) type=release ;; esac
+          jq -n --arg project "$PROJECT" --arg version "$VERSION" --arg type "$type" --arg mc "$MINECRAFT" '{
+            project_id: $project, name: "MCPersist \($version)", version_number: $version, version_type: $type,
+            changelog: "https://github.com/5TN1rcZRS79VAEFuUCRB/MCPersist/releases/tag/v\($version)",
+            game_versions: [$mc], loaders: ["fabric"], featured: true, file_parts: ["file"],
+            dependencies: [{project_id: "P7dR8mSH", dependency_type: "required"}]
+          }' > data.json
+          curl --fail-with-body -sS https://api.modrinth.com/v2/version \
+            -H "Authorization: $MODRINTH_TOKEN" -H "User-Agent: MCPersist release workflow" \
+            -F "data=<data.json;type=application/json" -F "file=@$JAR"

@@ -30,6 +30,16 @@ python test/smoke.py fabric/build/libs/mcpersist-fabric-<version>.jar
 
 The smoke test downloads a Fabric server and runs it with the mod.
 
+## Releasing
+
+Push a tag named after the version, e.g. `git tag v2.0.0-alpha.2 && git push origin v2.0.0-alpha.2`. The
+release workflow builds the jar with that version, attaches it to a GitHub Release (a pre-release for
+alpha, beta and rc versions), and publishes it to Modrinth.
+
+The Modrinth step runs once the repository has a `MODRINTH_TOKEN` secret (a Modrinth personal access token
+with the "Create versions" scope) and a `MODRINTH_PROJECT_ID` variable (the project's ID from its Modrinth
+settings). Until then it's skipped.
+
 ## Credits and license
 
 Based on e4mc by Skye. MIT licensed; see [LICENSE](LICENSE).
