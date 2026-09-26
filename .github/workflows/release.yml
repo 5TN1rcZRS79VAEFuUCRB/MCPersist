@@ -41,6 +41,8 @@ jobs:
             project_id: $project, name: "MCPersist \($version)", version_number: $version, version_type: $type,
             changelog: "https://github.com/5TN1rcZRS79VAEFuUCRB/MCPersist/releases/tag/v\($version)",
             game_versions: [$mc], loaders: ["fabric"], featured: true, file_parts: ["file"],
+            # Only the host needs it; players who join may add it for peer-to-peer.
+            environment: "client_only",
             dependencies: [{project_id: "P7dR8mSH", dependency_type: "required"}]
           }' > data.json
           curl --fail-with-body -sS https://api.modrinth.com/v2/version \
