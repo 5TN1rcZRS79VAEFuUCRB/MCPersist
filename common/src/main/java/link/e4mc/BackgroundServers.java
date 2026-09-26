@@ -178,7 +178,7 @@ public final class BackgroundServers {
                 if (start) {
                     User user = minecraft.getUser();
                     Handoff.Player host = new Handoff.Player(user.getProfileId(), user.getName());
-                    // Friends from earlier sessions are already on the whitelist.
+                    // Friends come from the host's whitelist, or the server's own from earlier sessions.
                     new Thread(() -> LocalHandoff.start(problem.worldDir(), host, List.of()), "mcpersist-handoff").start();
                 }
                 next.run();

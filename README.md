@@ -16,7 +16,9 @@ as a headless server in the background on your machine, and it keeps the same ad
 ## Joining a world
 
 Shared worlds use a whitelist. Before a friend joins for the first time, the host runs
-`/whitelist add <name>`. Everyone who joins is also let into the world's background server.
+`/whitelist add <name>`. The background server uses the same whitelist, as it was when the host left:
+manage it while you're playing, since changes made on the background server are replaced at the next
+handoff.
 
 Anyone can join with an unmodded client: they just type the world's address. Their connection is carried
 by the MCPersist relay, which adds a bit of latency.

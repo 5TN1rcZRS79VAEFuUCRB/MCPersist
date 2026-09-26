@@ -1,6 +1,7 @@
 package link.e4mc;
 
 import link.e4mc.handoff.Handoff;
+import net.minecraft.server.players.PlayerList;
 
 import java.lang.management.ManagementFactory;
 import java.nio.file.Path;
@@ -27,7 +28,8 @@ public final class LocalHandoff {
                 ProcessHandle.current().info().command().map(Path::of).orElseThrow(),
                 maxHeap(),
                 host,
-                players);
+                players,
+                usesWhitelist() ? PlayerList.WHITELIST_FILE.toPath().toAbsolutePath() : null);
         try {
             Path dir = Handoff.start(spec);
             E4mcClient.LOGGER.info("Handed {} to a background server in {}", worldDir, dir);
@@ -39,6 +41,11 @@ public final class LocalHandoff {
                 E4mcClient.LOGGER.error("Failed to record the failure", recordFailure);
             }
         }
+    }
+
+    /** Whether shared worlds in this game use its whitelist; see PlayerListMixin. */
+    private static boolean usesWhitelist() {
+        return Config.INSTANCE.useWhiteList.value() && Config.INSTANCE.restoreDedicatedCommands.value();
     }
 
     /** The game's own -Xmx, so heavy modpacks get the memory they already need. */

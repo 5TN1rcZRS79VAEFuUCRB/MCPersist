@@ -68,10 +68,12 @@ public final class Handoff {
      * @param maxHeap         the -Xmx value, e.g. "4G"
      * @param host            the world's owner: whitelisted, op level 4
      * @param players         everyone who joined while the host played: whitelisted
+     * @param hostWhitelist   the host's in-game whitelist file, or null if their game doesn't use one;
+     *                        when given, the server's whitelist is replaced by it, so removals carry over
      */
     public record Spec(Path worldDir, Path clientModsDir, Path clientConfigDir, Path serversDir,
                        String minecraftVersion, String loaderVersion, Path java, String maxHeap,
-                       Player host, List<Player> players) {}
+                       Player host, List<Player> players, Path hostWhitelist) {}
 
     private Handoff() {}
 
@@ -93,7 +95,7 @@ public final class Handoff {
         // The host turned persistence on for this world, which runs it as a Minecraft server.
         Files.writeString(dir.resolve("eula.txt"), "eula=true\n");
         writeServerProperties(dir, spec.worldDir());
-        writeAccessLists(dir, spec.host(), spec.players());
+        writeAccessLists(dir, spec.host(), spec.players(), spec.hostWhitelist());
         recoverHostPlayerData(spec.worldDir(), spec.host());
 
         List<String> command = List.of(spec.java().toString(), "-Xmx" + spec.maxHeap(), "-jar", SERVER_JAR, "nogui");
@@ -215,9 +217,12 @@ public final class Handoff {
         }
     }
 
-    /** Adds the session's players to the whitelist and the host as op, keeping existing entries. */
-    private static void writeAccessLists(Path dir, Player host, List<Player> players) throws IOException {
-        Map<UUID, JsonObject> whitelist = readList(dir.resolve("whitelist.json"));
+    /**
+     * Whitelists the host and the session's players, on top of the host's in-game whitelist if
+     * there is one (otherwise on top of the server's existing entries), and makes the host op.
+     */
+    private static void writeAccessLists(Path dir, Player host, List<Player> players, Path hostWhitelist) throws IOException {
+        Map<UUID, JsonObject> whitelist = readList(hostWhitelist != null ? hostWhitelist : dir.resolve("whitelist.json"));
         List<Player> allowed = new ArrayList<>(players);
         allowed.add(host);
         for (Player player : allowed) {
@@ -567,7 +572,8 @@ public final class Handoff {
                 options.getProperty("xmx", "1G"),
                 player(options.getProperty("host")),
                 options.getProperty("players", "").isEmpty() ? List.of()
-                        : Arrays.stream(options.getProperty("players").split(",")).map(Handoff::player).toList()));
+                        : Arrays.stream(options.getProperty("players").split(",")).map(Handoff::player).toList(),
+                options.containsKey("whitelist") ? Path.of(options.getProperty("whitelist")) : null));
         System.out.println(dir);
     }
 

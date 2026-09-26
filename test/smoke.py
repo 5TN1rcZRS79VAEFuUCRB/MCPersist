@@ -335,6 +335,8 @@ def wait_in_file(path, text, timeout):
 
 HOST = ("11111111-2222-3333-4444-555555555555", "SmokeHost")
 FRIEND = ("66666666-7777-8888-9999-000000000000", "SmokeFriend")
+ADDED = ("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", "SmokeAdded")
+REMOVED = ("12121212-3434-5656-7878-909090909090", "SmokeRemoved")
 NIL_UUID = "00000000-0000-0000-0000-000000000000"
 
 
@@ -376,7 +378,8 @@ def hand_off(cache, game, world, servers):
          "--world", str(world), "--mods", str(game / "mods"), "--config", str(game / "config"),
          "--servers", str(servers), "--minecraft", MINECRAFT_VERSION,
          "--loader", (cache / "loader.txt").read_text(), "--xmx", "768M",
-         "--host", f"{HOST[0]}:{HOST[1]}", "--players", f"{FRIEND[0]}:{FRIEND[1]}"],
+         "--host", f"{HOST[0]}:{HOST[1]}", "--players", f"{FRIEND[0]}:{FRIEND[1]}",
+         "--whitelist", str(game / "whitelist.json")],
         capture_output=True, text=True, timeout=300, env=handoff_env(),
     )
 
@@ -409,6 +412,11 @@ def test_handoff(cache, relay_bin):
             (game / "config" / "mcpersist").mkdir(parents=True)
             (game / "config" / "mcpersist" / "mcpersist.toml").write_text(mod_config)
             servers = game / "mcpersist" / "servers"
+            # The host whitelisted someone who hasn't joined yet, and removed someone the
+            # background server still lists from an earlier handoff.
+            (game / "whitelist.json").write_text(json.dumps([{"uuid": ADDED[0], "name": ADDED[1]}]))
+            (servers / world.name).mkdir(parents=True)
+            (servers / world.name / "whitelist.json").write_text(json.dumps([{"uuid": REMOVED[0], "name": REMOVED[1]}]))
 
             domains = []
             for attempt in range(2 if relay else 1):
@@ -548,7 +556,7 @@ def check_server_folder(server_dir, world):
     if any(props.get(key) != value for key, value in expected.items()):
         fail(f"wrong server.properties: {props}")
     whitelist = {(e["uuid"], e["name"]) for e in json.loads((server_dir / "whitelist.json").read_text())}
-    if whitelist != {HOST, FRIEND}:
+    if whitelist != {HOST, FRIEND, ADDED}:
         fail(f"wrong whitelist: {whitelist}")
     ops = json.loads((server_dir / "ops.json").read_text())
     if [(e["uuid"], e["name"], e["level"]) for e in ops] != [(*HOST, 4)]:
