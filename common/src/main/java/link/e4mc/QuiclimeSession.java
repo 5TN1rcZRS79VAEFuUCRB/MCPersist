@@ -37,6 +37,7 @@ import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
@@ -50,15 +51,10 @@ public class QuiclimeSession {
     final ChannelHandler handler;
 
     private static class ControlMessageCodec extends ByteToMessageCodec<ControlMessageCodec.ControlMessage> {
-        public ControlMessageCodec() {
-            super();
-        }
-
         public interface ControlMessage {}
 
         public static class ProbeCapabilitiesMessageServerbound implements ControlMessage {
             String kind = "probe_capabilities";
-            public ProbeCapabilitiesMessageServerbound() {}
         }
 
         public static class RequestDomainAssignmentMessageServerbound implements ControlMessage {
@@ -91,67 +87,39 @@ public class QuiclimeSession {
             }
         }
 
-        public static class HandedOffMessageClientbound implements ControlMessage {
-            String kind = "handed_off";
-        }
+        public static class HandedOffMessageClientbound implements ControlMessage {}
 
         public static class DomainAssignmentCompleteMessageClientbound implements ControlMessage {
-            String kind = "domain_assignment_complete";
             String domain;
-            public DomainAssignmentCompleteMessageClientbound(String domain) {
-                this.domain = domain;
-            }
         }
 
         public static class DomainAssignmentFailedMessageClientbound implements ControlMessage {
-            String kind = "domain_assignment_failed";
             String reason;
-            public DomainAssignmentFailedMessageClientbound(String reason) {
-                this.reason = reason;
-            }
         }
 
         public static class RequestMessageBroadcastMessageClientbound implements ControlMessage {
-            String kind = "request_message_broadcast";
             String message;
-            public RequestMessageBroadcastMessageClientbound(String message) {
-                this.message = message;
-            }
         }
 
         public static class HasCapabilitiesMessageClientbound implements ControlMessage {
-            String kind = "has_capabilities";
             String[] caps;
             // The UDP port players send voice to, from relays that carry it.
             Integer voice_port;
-            public HasCapabilitiesMessageClientbound(String[] caps) {
-                this.caps = caps;
-            }
         }
 
-        public static class TicketRegisteredMessageClientbound implements ControlMessage {
-            String kind = "ticket_registered";
-            public TicketRegisteredMessageClientbound() {
-            }
-        }
-
-        public static class UnknownMessageMessageClientbound implements ControlMessage {
-            String kind = "ticket_registered";
-            public UnknownMessageMessageClientbound() {
-            }
-        }
+        /** The relay's messages this session acts on, by kind; it skips the rest. */
+        private static final Map<String, Class<? extends ControlMessage>> CLIENTBOUND = Map.of(
+                "domain_assignment_complete", DomainAssignmentCompleteMessageClientbound.class,
+                "domain_assignment_failed", DomainAssignmentFailedMessageClientbound.class,
+                "request_message_broadcast", RequestMessageBroadcastMessageClientbound.class,
+                "has_capabilities", HasCapabilitiesMessageClientbound.class,
+                "handed_off", HandedOffMessageClientbound.class);
 
         @Override
         protected void encode(ChannelHandlerContext ctx, ControlMessage msg, ByteBuf out) {
-            E4mcClient.LOGGER.info("writing {}", msg);
-            try {
-                byte[] json = gson.toJson(msg).getBytes(StandardCharsets.UTF_8);
-                writeVarInt(out, json.length);
-                out.writeBytes(json);
-            } catch (Throwable e) {
-                E4mcClient.LOGGER.error("weird", e);
-            }
-            E4mcClient.LOGGER.info("writing {} bytes", out.readableBytes());
+            byte[] json = gson.toJson(msg).getBytes(StandardCharsets.UTF_8);
+            writeVarInt(out, json.length);
+            out.writeBytes(json);
         }
 
         @Override
@@ -162,30 +130,9 @@ public class QuiclimeSession {
                 var buf = new byte[size];
                 in.readBytes(buf);
                 var json = gson.fromJson(new String(buf, StandardCharsets.UTF_8), JsonObject.class);
-                switch (json.get("kind").getAsString()) {
-                    case "domain_assignment_complete":
-                        out.add(gson.fromJson(json, DomainAssignmentCompleteMessageClientbound.class));
-                        break;
-                    case "domain_assignment_failed":
-                        out.add(gson.fromJson(json, DomainAssignmentFailedMessageClientbound.class));
-                        break;
-                    case "request_message_broadcast":
-                        out.add(gson.fromJson(json, RequestMessageBroadcastMessageClientbound.class));
-                        break;
-                    case "has_capabilities":
-                        out.add(gson.fromJson(json, HasCapabilitiesMessageClientbound.class));
-                        break;
-                    case "ticket_registered":
-                        out.add(gson.fromJson(json, TicketRegisteredMessageClientbound.class));
-                        break;
-                    case "handed_off":
-                        out.add(new HandedOffMessageClientbound());
-                        break;
-                    case "unknown_message":
-                        out.add(gson.fromJson(json, UnknownMessageMessageClientbound.class));
-                        break;
-                    default:
-                        throw new RuntimeException("Invalid message type!");
+                var type = CLIENTBOUND.get(json.get("kind").getAsString());
+                if (type != null) {
+                    out.add(gson.fromJson(json, type));
                 }
             }
         }
@@ -421,8 +368,7 @@ public class QuiclimeSession {
                                                                     ticket = Endpoint.sanitizeTicket(ticket);
                                                                 }
                                                                 streamChannel
-                                                                        .writeAndFlush(new ControlMessageCodec.DialtoneRegisterTicketMessageServerbound("v1_" + ticket))
-                                                                        .addListener(ignored -> LOGGER.info("notified server of our ticket"));
+                                                                        .writeAndFlush(new ControlMessageCodec.DialtoneRegisterTicketMessageServerbound("v1_" + ticket));
                                                             }
                                                         }
                                                     })
@@ -451,11 +397,9 @@ public class QuiclimeSession {
                         controlChannel = streamChannel;
                         LOGGER.info("control channel open: {}", streamChannel);
                         streamChannel
-                                .writeAndFlush(new ControlMessageCodec.ProbeCapabilitiesMessageServerbound())
-                                .addListener(ignored -> LOGGER.info("probing capabilities"));
+                                .writeAndFlush(new ControlMessageCodec.ProbeCapabilitiesMessageServerbound());
                         streamChannel
-                                .writeAndFlush(new ControlMessageCodec.RequestDomainAssignmentMessageServerbound(worldKey))
-                                .addListener(ignored -> LOGGER.info("control channel write complete"));
+                                .writeAndFlush(new ControlMessageCodec.RequestDomainAssignmentMessageServerbound(worldKey));
                         quicChannel.closeFuture().addListener(ignored -> datagramChannel.close());
                     });
                 });
