@@ -34,6 +34,11 @@ public abstract class ConnectionMixin implements DialtoneConnectionExtensions {
     private static DialtoneAddress e4mc$smuggledDialtoneAddress = null;
 
     @Override
+    public boolean e4mc$isDialtone() {
+        return channel instanceof DialtoneChannel;
+    }
+
+    @Override
     public void e4mc$setDialedAddress(SocketAddress address) {
         e4mc$dialedAddress = address;
     }
