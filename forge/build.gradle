@@ -11,6 +11,7 @@ group = rootProject.maven_group
 repositories {
     maven { url 'https://repo.sleeping.town/' }
     maven { url 'https://maven.is-quite.gay/' }
+    maven { url 'https://maven.maxhenkel.de/repository/public' }
 }
 
 // Loader-neutral code lives in common/ (as in e4mc); this project adds the Forge glue.
@@ -50,6 +51,9 @@ dependencies {
     }
     jarJar(implementation("dev.dirs:directories:${rootProject.dirs_version}"))
     jarJar(implementation('folk.sisby:kaleido-config:0.3.3+1.3.2'))
+
+    // Simple Voice Chat, when installed, loads link.e4mc.voice.VoicePlugin.
+    compileOnly "de.maxhenkel.voicechat:voicechat-api:${rootProject.voicechat_api_version}"
 }
 
 processResources {

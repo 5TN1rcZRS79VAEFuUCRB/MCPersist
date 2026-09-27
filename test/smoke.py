@@ -96,6 +96,12 @@ def download_server(cache, mod_jar):
     download(versions[0]["files"][0]["url"], cache / "fabric-api.jar")
 
 
+def download_voicechat(cache):
+    query = urllib.parse.urlencode({"game_versions": f'["{MINECRAFT_VERSION}"]', "loaders": f'["{LOADER}"]'})
+    versions = get_json(f"https://api.modrinth.com/v2/project/simple-voice-chat/version?{query}")
+    download(versions[0]["files"][0]["url"], cache / "voicechat.jar")
+
+
 def install_server(cache):
     maven, versions = INSTALLERS[LOADER]
     version = re.findall(rf"<version>({versions})</version>", fetch(f"{maven}/maven-metadata.xml").decode())[-1]
@@ -195,15 +201,20 @@ def test_commands(cache):
         root = Path(tmp)
         # Keep this scenario off any relay; it's about the server, not the tunnel.
         prepare_server(root, cache, "hostEnabled = false\n")
+        # Simple Voice Chat finds MCPersist's plugin and runs its voice server on its socket.
+        shutil.copy(cache / "voicechat.jar", root / "mods")
         server = Server(root)
         server.wait_for("Done (", timeout=300)
+        server.wait_for("Voice chat server started", timeout=60)
+        if not any("Loaded 1 plugin" in line for line in server.log):
+            fail("Simple Voice Chat didn't load MCPersist's plugin", server)
         # Listing commands evaluates every command's permission check, including
         # /e4mc's; before the fix this crashed the tick loop on 1.21.11+ (e4mc#228).
         server.command("help")
         server.wait_for("/e4mc", timeout=30)
         if "using relay" in server.stop_cleanly():
             fail("mod contacted the relay despite hostEnabled = false")
-    print("PASS: server ran the mod, listed /e4mc for the console, and stopped cleanly")
+    print("PASS: server ran the mod with Simple Voice Chat, listed /e4mc for the console, and stopped cleanly")
 
 
 BASE_DOMAIN = "relay.test"
@@ -245,6 +256,7 @@ def start_relay(relay_bin, root):
         QUICLIME_BIND_ADDR_QUIC=f"127.0.0.1:{quic_port}",
         QUICLIME_BIND_ADDR_WEB=f"127.0.0.1:{free_port()}",
         QUICLIME_BIND_ADDR_MC=f"127.0.0.1:{mc_port}",
+        QUICLIME_BIND_ADDR_VOICE=f"127.0.0.1:{free_port()}",
         RUST_LOG="info",
     )
     relay = subprocess.Popen([relay_bin], env=env)
@@ -324,6 +336,8 @@ def test_relayed_leave(cache, relay_bin):
                 properties.write("white-list=false\n")
             server = Server(server_root, jvm_args)
             domain = server.wait_for("Domain assigned: ", timeout=300).split("Domain assigned: ", 1)[1].strip()
+            if not any("Relay carries voice chat on port" in line for line in server.log):
+                fail("the mod didn't learn the relay's voice chat port", server)
             if not any("Done (" in logged for logged in server.log):
                 server.wait_for("Done (", timeout=300)
             host = domain.encode()
@@ -639,6 +653,7 @@ def main():
     with tempfile.TemporaryDirectory() as tmp:
         cache = Path(tmp)
         download_server(cache, mod_jar)
+        download_voicechat(cache)
         test_commands(cache)
         relay_bin = os.environ.get("MCPERSIST_RELAY")
         if relay_bin:
