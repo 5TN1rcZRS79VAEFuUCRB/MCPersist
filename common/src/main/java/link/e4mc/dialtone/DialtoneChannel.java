@@ -10,6 +10,7 @@ import link.e4mc.iroh.Endpoint;
 import link.e4mc.iroh.Native;
 import link.e4mc.iroh.Stream;
 
+import java.net.InetSocketAddress;
 import java.net.SocketAddress;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
@@ -54,9 +55,14 @@ public class DialtoneChannel extends AbstractChannel {
         return new DialtoneAddress(endpoint.address());
     }
 
+    /** The relay address a joining player dialed; see {@link #remoteAddress0()}. */
+    private InetSocketAddress dialed;
+
+    // A joining player's end reports the address they dialed, not the peer's ticket: Simple
+    // Voice Chat (and anything else asking where the server is) needs an IP address.
     @Override
     protected SocketAddress remoteAddress0() {
-        return new DialtoneAddress(connection.peerAddress());
+        return dialed != null ? dialed : new DialtoneAddress(connection.peerAddress());
     }
 
     @Override
@@ -196,6 +202,7 @@ public class DialtoneChannel extends AbstractChannel {
 
             try {
                 if (remoteAddress instanceof DialtoneAddress dialtoneAddress) {
+                    dialed = dialtoneAddress.dialed;
                     if (DialtoneAmbientSession.INSTANCE.endpoint == null) {
                         DialtoneAmbientSession.INSTANCE.start();
                     }
