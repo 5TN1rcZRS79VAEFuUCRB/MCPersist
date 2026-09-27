@@ -69,5 +69,5 @@ settings). Until then it's skipped.
 
 Based on e4mc by Skye. MIT licensed; see [LICENSE](LICENSE).
 
-Bundles [iroh-java](https://github.com/vgskye/iroh-java), also by Skye, which the author has said to treat
-as MIT licensed (its repository doesn't include a license file yet).
+Bundles [iroh-java](https://github.com/vgskye/iroh-java), also by Skye, MIT licensed; see
+[its LICENSE](https://github.com/vgskye/iroh-java/blob/main/LICENSE).
