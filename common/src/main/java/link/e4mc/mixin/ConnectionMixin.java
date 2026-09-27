@@ -22,35 +22,17 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 import javax.crypto.Cipher;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
-import java.net.SocketAddress;
 
 @Mixin(Connection.class)
 public abstract class ConnectionMixin implements DialtoneConnectionExtensions {
 
     @Shadow private Channel channel;
-    @Shadow private SocketAddress address;
-    @Unique
-    private SocketAddress e4mc$dialedAddress;
     @Unique
     private static DialtoneAddress e4mc$smuggledDialtoneAddress = null;
 
     @Override
     public boolean e4mc$isDialtone() {
         return channel instanceof DialtoneChannel;
-    }
-
-    @Override
-    public void e4mc$setDialedAddress(SocketAddress address) {
-        e4mc$dialedAddress = address;
-    }
-
-    // A Dialtone channel's own remote address is its ticket; Simple Voice Chat (and anything
-    // else asking where the server is) needs the relay address the player dialed.
-    @Inject(method = "channelActive", at = @At("TAIL"))
-    private void e4mc$reportDialedAddress(ChannelHandlerContext ctx, CallbackInfo ci) {
-        if (e4mc$dialedAddress != null) {
-            address = e4mc$dialedAddress;
-        }
     }
 
     @Override
@@ -64,8 +46,7 @@ public abstract class ConnectionMixin implements DialtoneConnectionExtensions {
     @Inject(method = "connect", at = @At("HEAD"))
     private static void hijackStart(InetSocketAddress inetSocketAddress, EventLoopGroupHolder groups, Connection connection, CallbackInfoReturnable<ChannelFuture> cir) {
         if (inetSocketAddress instanceof SmugglersInetSocketAddress smuggledAddress) {
-            e4mc$smuggledDialtoneAddress = new DialtoneAddress(smuggledAddress.ticket);
-            ((DialtoneConnectionExtensions) connection).e4mc$setDialedAddress(smuggledAddress);
+            e4mc$smuggledDialtoneAddress = new DialtoneAddress(smuggledAddress.ticket, smuggledAddress);
         }
     }
 
