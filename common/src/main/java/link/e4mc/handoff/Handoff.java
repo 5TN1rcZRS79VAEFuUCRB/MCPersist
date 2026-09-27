@@ -265,12 +265,7 @@ public final class Handoff {
     /** Keeps any other settings the host changed; sets the ones the handoff depends on. */
     private static void writeServerProperties(Path dir, Path worldDir) throws IOException {
         Path file = dir.resolve("server.properties");
-        Properties props = new Properties();
-        if (Files.exists(file)) {
-            try (InputStream in = Files.newInputStream(file)) {
-                props.load(in);
-            }
-        }
+        Properties props = Files.exists(file) ? Launcher.serverProperties(dir) : new Properties();
         // Forward slashes on every OS: the server reads this with java.util.Properties.
         props.setProperty("level-name", worldDir.toAbsolutePath().toString().replace('\\', '/'));
         props.setProperty("accepts-transfers", "true");
@@ -354,14 +349,6 @@ public final class Handoff {
         byte[] bytes = new byte[18];
         new SecureRandom().nextBytes(bytes);
         return Base64.getUrlEncoder().withoutPadding().encodeToString(bytes);
-    }
-
-    private static Properties serverProperties(Path dir) throws IOException {
-        Properties props = new Properties();
-        try (InputStream in = Files.newInputStream(dir.resolve("server.properties"))) {
-            props.load(in);
-        }
-        return props;
     }
 
     /** What its command line holds that other programs' don't: the server jar or arguments file. */
@@ -478,7 +465,7 @@ public final class Handoff {
 
     private static Properties serverPropertiesOrEmpty(Path dir) {
         try {
-            return serverProperties(dir);
+            return Launcher.serverProperties(dir);
         } catch (IOException e) {
             return new Properties();
         }
@@ -499,7 +486,7 @@ public final class Handoff {
 
     /** The loopback port the host's own client connects to. */
     public static int localPort(Path serversDir, Path worldDir) throws IOException {
-        return Integer.parseInt(serverProperties(serverDir(serversDir, worldDir)).getProperty("server-port"));
+        return Integer.parseInt(Launcher.serverProperties(serverDir(serversDir, worldDir)).getProperty("server-port"));
     }
 
     public enum StopResult { NOT_RUNNING, STOPPED, TERMINATED }
@@ -517,7 +504,7 @@ public final class Handoff {
         }
         StopResult result = StopResult.STOPPED;
         try {
-            Properties props = serverProperties(dir);
+            Properties props = Launcher.serverProperties(dir);
             int port = Integer.parseInt(props.getProperty("rcon.port"));
             // The server opens RCON just after it logs "Done", so a stop requested right
             // after startup can arrive before it listens.
@@ -585,8 +572,10 @@ public final class Handoff {
         }
     }
 
+    private static final HttpClient HTTP = HttpClient.newBuilder().followRedirects(HttpClient.Redirect.NORMAL).build();
+
     private static String get(String url) throws IOException, InterruptedException {
-        HttpResponse<String> response = HttpClient.newHttpClient().send(
+        HttpResponse<String> response = HTTP.send(
                 HttpRequest.newBuilder(URI.create(url)).header("User-Agent", "MCPersist").build(),
                 HttpResponse.BodyHandlers.ofString());
         if (response.statusCode() != 200) {
@@ -597,7 +586,7 @@ public final class Handoff {
 
     private static void download(String url, Path dest) throws IOException, InterruptedException {
         Path tmp = dest.resolveSibling(dest.getFileName() + ".part");
-        HttpResponse<Path> response = HttpClient.newBuilder().followRedirects(HttpClient.Redirect.NORMAL).build().send(
+        HttpResponse<Path> response = HTTP.send(
                 HttpRequest.newBuilder(URI.create(url)).header("User-Agent", "MCPersist").build(),
                 HttpResponse.BodyHandlers.ofFile(tmp));
         if (response.statusCode() != 200) {
@@ -610,7 +599,7 @@ public final class Handoff {
     /**
      * Command-line entry point, for tests. {@code --action start} (the default) takes {@code
      * --world --mods --config --servers --minecraft --loader --loader-version --host uuid:name [--players
-     * uuid:name,...] [--java] [--xmx]} and prints the server folder once it has started;
+     * uuid:name,...] [--xmx]} and prints the server folder once it has started;
      * {@code --action status|stop|disable} take {@code --world --servers}; {@code --action problems}
      * takes {@code --servers}.
      */
@@ -643,9 +632,7 @@ public final class Handoff {
             case "start" -> {}
             default -> throw new IllegalArgumentException("unknown --action");
         }
-        Path java = options.containsKey("java")
-                ? Path.of(options.getProperty("java"))
-                : ProcessHandle.current().info().command().map(Path::of).orElseThrow();
+        Path java = ProcessHandle.current().info().command().map(Path::of).orElseThrow();
         Path dir = start(new Spec(
                 world,
                 Path.of(options.getProperty("mods")),
