@@ -70,12 +70,16 @@ public final class Launcher {
         Files.writeString(dir.resolve(FAILURE_FILE), worldDir.toAbsolutePath() + "\n" + e);
     }
 
-    static Path worldDir(Path dir) throws IOException {
+    static Properties serverProperties(Path dir) throws IOException {
         Properties props = new Properties();
         try (InputStream in = Files.newInputStream(dir.resolve("server.properties"))) {
             props.load(in);
         }
-        return Path.of(props.getProperty("level-name"));
+        return props;
+    }
+
+    static Path worldDir(Path dir) throws IOException {
+        return Path.of(serverProperties(dir).getProperty("level-name"));
     }
 
     /**
