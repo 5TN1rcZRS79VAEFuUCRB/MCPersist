@@ -24,7 +24,7 @@ public class Agnos {
 
     /** The version of a loaded mod, e.g. "minecraft" or "forge". */
     public static String modVersion(String modId) {
-        return ModList.getModContainerById(modId).orElseThrow().getModInfo().getVersion().toString();
+        return ModList.get().getModContainerById(modId).orElseThrow().getModInfo().getVersion().toString();
     }
 
     /** The version of the loader itself, as its server installer names it. */
@@ -33,6 +33,6 @@ public class Agnos {
     }
 
     public static Path jarPath() {
-        return ModList.getModFileById(E4mcClient.MOD_ID).getFile().getFilePath();
+        return ModList.get().getModFileById(E4mcClient.MOD_ID).getFile().getFilePath();
     }
 }

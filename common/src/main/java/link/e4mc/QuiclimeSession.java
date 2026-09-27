@@ -8,12 +8,7 @@ import io.netty.buffer.ByteBuf;
 import io.netty.channel.*;
 import io.netty.channel.epoll.EpollDatagramChannel;
 import io.netty.channel.epoll.EpollEventLoopGroup;
-import io.netty.channel.epoll.EpollIoHandler;
-import io.netty.channel.kqueue.KQueueDatagramChannel;
-import io.netty.channel.kqueue.KQueueEventLoopGroup;
-import io.netty.channel.kqueue.KQueueIoHandler;
 import io.netty.channel.nio.NioEventLoopGroup;
-import io.netty.channel.nio.NioIoHandler;
 import io.netty.channel.socket.DatagramChannel;
 import io.netty.channel.socket.nio.NioDatagramChannel;
 import io.netty.handler.codec.ByteToMessageCodec;
@@ -218,7 +213,7 @@ public class QuiclimeSession {
     }
 
     private static void addMessage(Component message) {
-        Minecraft.getInstance().execute(() -> Minecraft.getInstance().gui.hud.getChat().addClientSystemMessage(message));
+        Minecraft.getInstance().execute(() -> Minecraft.getInstance().gui.getChat().addMessage(message));
     }
 
     public static String[] getRelayMap() throws Exception {
@@ -261,16 +256,6 @@ public class QuiclimeSession {
                 channelClass = EpollDatagramChannel.class;
             } else if (group instanceof NioEventLoopGroup) {
                 channelClass = NioDatagramChannel.class;
-            } else if (group instanceof KQueueEventLoopGroup) {
-                channelClass = KQueueDatagramChannel.class;
-            } else if (group instanceof MultiThreadIoEventLoopGroup mig) {
-                if (mig.isIoType(EpollIoHandler.class)) {
-                    channelClass = EpollDatagramChannel.class;
-                } else if (mig.isIoType(NioIoHandler.class)) {
-                    channelClass = NioDatagramChannel.class;
-                } else if (mig.isIoType(KQueueIoHandler.class)) {
-                    channelClass = KQueueDatagramChannel.class;
-                }
             } else {
                 throw new RuntimeException("Unknown EventLoopGroup " + group.getClass().getName());
             }
@@ -288,7 +273,24 @@ public class QuiclimeSession {
                 }
                 datagramChannel = (DatagramChannel) ((ChannelFuture) datagramChannelFuture).channel();
                 QuicChannel.newBootstrap(datagramChannel)
-                        .streamHandler(handler)
+                        .streamHandler(new ChannelInitializer<QuicStreamChannel>() {
+                            @Override
+                            protected void initChannel(QuicStreamChannel ch) {
+                                // A player who leaves has the relay reset their stream. The game answers
+                                // the error with a disconnect packet it only closes on once sent, which
+                                // it never is, so they'd linger until the read timeout: close here.
+                                ch.pipeline().addLast(new ChannelInboundHandlerAdapter() {
+                                    @Override
+                                    public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
+                                        if (cause instanceof QuicException) {
+                                            ctx.close();
+                                        } else {
+                                            ctx.fireExceptionCaught(cause);
+                                        }
+                                    }
+                                }, handler);
+                            }
+                        })
                         .handler(new ChannelInboundHandlerAdapter() {
                             @Override
                             public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) throws Exception {
@@ -341,18 +343,18 @@ public class QuiclimeSession {
                                                     : Component.literal(domain);
                                             Component message = Component.translatable("text.e4mc_minecraft.domainAssigned",
                                                     domainComponent.withStyle(it -> it
-                                                            .withClickEvent(new ClickEvent.CopyToClipboard(domain))
+                                                            .withClickEvent(new ClickEvent(ClickEvent.Action.COPY_TO_CLIPBOARD, domain))
                                                             .withColor(ChatFormatting.GREEN)
-                                                            .withHoverEvent(new HoverEvent.ShowText(Component.translatable("chat.copy.click")))))
+                                                            .withHoverEvent(new HoverEvent(HoverEvent.Action.SHOW_TEXT, Component.translatable("chat.copy.click")))))
                                                     .append(Component.translatable("text.e4mc_minecraft.clickToStop").withStyle(it -> it
-                                                            .withClickEvent(new ClickEvent.RunCommand("/e4mc stop"))
+                                                            .withClickEvent(new ClickEvent(ClickEvent.Action.RUN_COMMAND, "/e4mc stop"))
                                                             .withColor(ChatFormatting.GRAY)));
                                             addMessage(message);
                                             // Whitelisting is only applied when the dedicated commands are.
                                             if (Config.INSTANCE.useWhiteList.value() && Config.INSTANCE.restoreDedicatedCommands.value()) {
                                                 addMessage(Component.translatable("text.mcpersist.whitelistOn",
                                                         Component.literal("/whitelist add <name>").withStyle(it -> it
-                                                                .withClickEvent(new ClickEvent.SuggestCommand("/whitelist add "))
+                                                                .withClickEvent(new ClickEvent(ClickEvent.Action.SUGGEST_COMMAND, "/whitelist add "))
                                                                 .withColor(ChatFormatting.YELLOW))));
                                             }
                                         }

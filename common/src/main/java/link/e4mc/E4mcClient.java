@@ -6,7 +6,6 @@ import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.commands.Commands;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.commands.*;
-import net.minecraft.server.permissions.Permissions;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -33,10 +32,10 @@ public class E4mcClient {
                                 return false;
                             }
                             if (src.getServer().isDedicatedServer()) {
-                                return src.permissions().hasPermission(Permissions.COMMANDS_OWNER);
+                                return src.hasPermission(4);
                             } else {
                                 try {
-                                    return src.getServer().isSingleplayerOwner(src.getPlayerOrException().nameAndId());
+                                    return src.getServer().isSingleplayerOwner(src.getPlayerOrException().getGameProfile());
                                 } catch (CommandSyntaxException e) {
                                     return false;
                                 }

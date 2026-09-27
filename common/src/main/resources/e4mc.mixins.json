@@ -1,6 +1,7 @@
 {
   "required": true,
   "package": "link.e4mc.mixin",
+  "refmap": "e4mc.refmap.json",
   "compatibilityLevel": "JAVA_17",
   "minVersion": "0.8",
   "mixins": [
@@ -22,13 +23,14 @@
     "EditWorldScreenMixin",
     "IntegratedServerMixin",
     "LevelSummaryMixin",
-    "MinecraftMixin",
+    "PauseScreenMixin",
     "PlayerListMixin",
     "SelectWorldScreenMixin",
     "ServerAddressMixin",
     "ServerNameResolverMixin",
     "TitleScreenMixin",
     "WorldListEntryMixin",
-    "WorldOptionsScreenMixin"
+    "WorldSelectionListAccessor",
+    "ShareToLanScreenMixin"
   ]
 }

@@ -7,8 +7,7 @@ import net.minecraft.network.Connection;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerPlayer;
-import net.minecraft.server.network.CommonListenerCookie;
-import net.minecraft.server.players.NameAndId;
+import com.mojang.authlib.GameProfile;
 import net.minecraft.server.players.PlayerList;
 import net.minecraft.server.players.UserBanList;
 import net.minecraft.server.players.UserWhiteList;
@@ -30,10 +29,12 @@ public abstract class PlayerListMixin {
 
     @Shadow public abstract MinecraftServer getServer();
 
+    @Shadow public abstract void setUsingWhiteList(boolean usingWhiteList);
+
     @Inject(method = "<init>", at = @At("TAIL"))
     void injectListLoads(CallbackInfo ci) {
         if (Config.INSTANCE.restoreDedicatedCommands.value()) {
-            getServer().setUsingWhitelist(Config.INSTANCE.useWhiteList.value());
+            setUsingWhiteList(Config.INSTANCE.useWhiteList.value());
             try {
                 this.getBans().load();
             } catch (IOException e) {
@@ -49,12 +50,12 @@ public abstract class PlayerListMixin {
 
     /** Everyone who plays during the host's session is whitelisted on the background server. */
     @Inject(method = "placeNewPlayer", at = @At("TAIL"))
-    void mcpersist$recordJoin(Connection connection, ServerPlayer player, CommonListenerCookie cookie, CallbackInfo ci) {
-        ((SessionPlayers) getServer()).mcpersist$sessionPlayers().add(player.nameAndId());
+    void mcpersist$recordJoin(Connection connection, ServerPlayer player, CallbackInfo ci) {
+        ((SessionPlayers) getServer()).mcpersist$sessionPlayers().add(player.getGameProfile());
     }
 
     @Inject(method = "canPlayerLogin", at = @At("HEAD"), cancellable = true)
-    public void allowOwnerLogin(SocketAddress socketAddress, NameAndId player, CallbackInfoReturnable<Component> cir) {
+    public void allowOwnerLogin(SocketAddress socketAddress, GameProfile player, CallbackInfoReturnable<Component> cir) {
         if (getServer().isSingleplayerOwner(player)) {
             cir.setReturnValue(null);
         }

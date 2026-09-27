@@ -8,7 +8,6 @@ import link.e4mc.WorldPersistence;
 import link.e4mc.handoff.Handoff;
 import net.minecraft.CrashReport;
 import net.minecraft.server.MinecraftServer;
-import net.minecraft.server.players.NameAndId;
 import net.minecraft.world.level.storage.LevelResource;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Shadow;
@@ -26,7 +25,7 @@ import java.util.concurrent.ConcurrentHashMap;
 @Mixin(MinecraftServer.class)
 public abstract class MinecraftServerMixin implements SessionPlayers {
     @Unique
-    private final Set<NameAndId> mcpersist$sessionPlayers = ConcurrentHashMap.newKeySet();
+    private final Set<GameProfile> mcpersist$sessionPlayers = ConcurrentHashMap.newKeySet();
 
     @Shadow
     public abstract boolean isDedicatedServer();
@@ -35,7 +34,7 @@ public abstract class MinecraftServerMixin implements SessionPlayers {
     public abstract GameProfile getSingleplayerProfile();
 
     @Override
-    public Set<NameAndId> mcpersist$sessionPlayers() {
+    public Set<GameProfile> mcpersist$sessionPlayers() {
         return mcpersist$sessionPlayers;
     }
 
@@ -111,8 +110,7 @@ public abstract class MinecraftServerMixin implements SessionPlayers {
         if (!mcpersist$shared || owner == null || !WorldPersistence.isPersistent(worldDir)) {
             return;
         }
-        NameAndId host = new NameAndId(owner);
-        LocalHandoff.start(worldDir, new Handoff.Player(host.id(), host.name()),
-                mcpersist$sessionPlayers.stream().map(p -> new Handoff.Player(p.id(), p.name())).toList());
+        LocalHandoff.start(worldDir, new Handoff.Player(owner.getId(), owner.getName()),
+                mcpersist$sessionPlayers.stream().map(p -> new Handoff.Player(p.getId(), p.getName())).toList());
     }
 }

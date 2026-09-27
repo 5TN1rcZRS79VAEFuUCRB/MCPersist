@@ -10,7 +10,6 @@ import link.e4mc.dialtone.DialtoneAddress;
 import link.e4mc.dialtone.DialtoneAmbientSession;
 import link.e4mc.dialtone.DialtoneChannel;
 import net.minecraft.network.Connection;
-import net.minecraft.server.network.EventLoopGroupHolder;
 import org.objectweb.asm.Opcodes;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Shadow;
@@ -39,7 +38,7 @@ public abstract class ConnectionMixin implements DialtoneConnectionExtensions {
     }
 
     @Inject(method = "connect", at = @At("HEAD"))
-    private static void hijackStart(InetSocketAddress inetSocketAddress, EventLoopGroupHolder groups, Connection connection, CallbackInfoReturnable<ChannelFuture> cir) {
+    private static void hijackStart(InetSocketAddress inetSocketAddress, boolean useEpoll, Connection connection, CallbackInfoReturnable<ChannelFuture> cir) {
         if (inetSocketAddress instanceof SmugglersInetSocketAddress smuggledAddress) {
             e4mc$smuggledDialtoneAddress = new DialtoneAddress(smuggledAddress.ticket);
         }

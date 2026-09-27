@@ -8,25 +8,13 @@ jobs:
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: 25
+          java-version: 17
       - uses: gradle/actions/setup-gradle@v4
       - run: sh ./gradlew build
       - uses: actions/upload-artifact@v4
         with:
-          name: mcpersist-fabric
-          path: |
-            fabric/build/libs/mcpersist-fabric-*.jar
-            !fabric/build/libs/*-sources.jar
-      - uses: actions/upload-artifact@v4
-        with:
-          name: mcpersist-neoforge
-          path: neoforge/build/libs/mcpersist-neoforge-*.jar
-      - uses: actions/upload-artifact@v4
-        with:
           name: mcpersist-forge
-          path: |
-            forge/build/libs/mcpersist-forge-*.jar
-            !forge/build/libs/*-slim.jar
+          path: forge/build/libs/mcpersist-forge-*.jar
 
   smoke:
     name: smoke (${{ matrix.loader }}, ${{ matrix.os }})
@@ -34,7 +22,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        loader: [fabric, neoforge, forge]
+        loader: [forge]
         os: [ubuntu-latest, windows-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
@@ -44,10 +32,11 @@ jobs:
         with:
           name: mcpersist-${{ matrix.loader }}
           path: jar
+      # 1.20.1 players run the game on Java 17.
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: 25
+          java-version: 17
       - uses: actions/setup-python@v5
         with:
           python-version: "3.x"

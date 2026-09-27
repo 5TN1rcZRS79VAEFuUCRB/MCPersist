@@ -342,7 +342,7 @@ public final class Handoff {
      * which a dedicated server never loads: the host would arrive with an empty inventory.
      */
     static void recoverHostPlayerData(Path worldDir, Player host) throws IOException {
-        Path data = worldDir.resolve("players").resolve("data");
+        Path data = worldDir.resolve("playerdata");
         Path hostFile = data.resolve(host.id() + ".dat");
         Path nilFile = data.resolve(NIL + ".dat");
         if (!Files.exists(hostFile) && Files.exists(nilFile)) {

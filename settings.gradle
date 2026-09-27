@@ -1,10 +1,9 @@
 pluginManagement {
     repositories {
-        maven { url "https://maven.fabricmc.net/" }
         gradlePluginPortal()
     }
 }
 
-include("fabric", "neoforge", "forge")
+include("forge")
 
 rootProject.name = "mcpersist"

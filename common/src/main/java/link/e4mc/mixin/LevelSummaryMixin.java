@@ -22,10 +22,10 @@ public abstract class LevelSummaryMixin {
     @Shadow
     public abstract boolean isLocked();
 
-    @Inject(method = "primaryActionActive", at = @At("RETURN"), cancellable = true)
+    @Inject(method = "isDisabled", at = @At("RETURN"), cancellable = true)
     private void mcpersist$joinableInBackground(CallbackInfoReturnable<Boolean> cir) {
-        if (!cir.getReturnValueZ() && isLocked() && BackgroundServers.isRunning(getLevelId())) {
-            cir.setReturnValue(true);
+        if (cir.getReturnValueZ() && isLocked() && BackgroundServers.isRunning(getLevelId())) {
+            cir.setReturnValue(false);
         }
     }
 

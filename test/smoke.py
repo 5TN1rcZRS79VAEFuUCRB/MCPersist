@@ -30,7 +30,7 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-MINECRAFT_VERSION = "26.3"
+MINECRAFT_VERSION = "1.20.1"
 FABRIC_META = "https://meta.fabricmc.net/v2/versions"
 # The installer-based loaders: where they publish, and their versions for this Minecraft.
 INSTALLERS = {
@@ -328,9 +328,9 @@ def test_relayed_leave(cache, relay_bin):
                 server.wait_for("Done (", timeout=300)
             host = domain.encode()
             with socket.create_connection(("127.0.0.1", mc_port), timeout=15) as player:
-                # Handshake for 26.3 (protocol 777), then Login Start as an offline-mode player.
-                player.sendall(packet(0, varint(777) + varint(len(host)) + host + struct.pack(">H", 25565) + varint(2)))
-                player.sendall(packet(0, varint(6) + b"Leaver" + uuid.uuid4().bytes))
+                # Handshake for 1.20.1 (protocol 763), then Login Start as an offline-mode player.
+                player.sendall(packet(0, varint(763) + varint(len(host)) + host + struct.pack(">H", 25565) + varint(2)))
+                player.sendall(packet(0, varint(6) + b"Leaver" + b"\x01" + uuid.uuid4().bytes))
                 if not player.recv(4096):
                     fail("the server never answered a login through the relay", server)
             left = time.monotonic()
@@ -449,8 +449,8 @@ def test_handoff(cache, relay_bin):
             world.mkdir(parents=True)
             (world / "mcpersist.properties").write_text("persistent=true\nkey=smoke-test-handoff-key-0123456789\n")
             # A migrated world that stored the host under the all-zeros UUID.
-            (world / "players" / "data").mkdir(parents=True)
-            (world / "players" / "data" / f"{NIL_UUID}.dat").write_bytes(b"host inventory")
+            (world / "playerdata").mkdir(parents=True)
+            (world / "playerdata" / f"{NIL_UUID}.dat").write_bytes(b"host inventory")
             (game / "mods").mkdir()
             shutil.copy(cache / "mod.jar", game / "mods" / "mcpersist.jar")
             if LOADER == "fabric":
@@ -476,7 +476,7 @@ def test_handoff(cache, relay_bin):
                 if result.returncode != 0:
                     fail(f"handoff failed: {result.stderr}")
                 server_dir = Path(result.stdout.strip().splitlines()[-1])
-                host_data = world / "players" / "data" / f"{HOST[0]}.dat"
+                host_data = world / "playerdata" / f"{HOST[0]}.dat"
                 if not host_data.exists() or host_data.read_bytes() != b"host inventory":
                     fail("host player data under the all-zeros UUID was not recovered")
                 if server_dir != servers / world.name:

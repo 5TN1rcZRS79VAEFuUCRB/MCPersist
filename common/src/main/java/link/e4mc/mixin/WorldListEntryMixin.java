@@ -2,7 +2,7 @@ package link.e4mc.mixin;
 
 import link.e4mc.BackgroundServers;
 import link.e4mc.E4mcClient;
-import net.minecraft.client.gui.screens.Screen;
+import net.minecraft.client.gui.screens.worldselection.SelectWorldScreen;
 import net.minecraft.client.gui.screens.worldselection.WorldSelectionList;
 import net.minecraft.world.level.storage.LevelSummary;
 import org.spongepowered.asm.mixin.Final;
@@ -25,7 +25,7 @@ public abstract class WorldListEntryMixin {
 
     @Shadow
     @Final
-    private Screen screen;
+    private SelectWorldScreen screen;
 
     /** Locked by its own background server; checked once, since entries are rebuilt on reload. */
     @Unique
@@ -37,7 +37,7 @@ public abstract class WorldListEntryMixin {
     }
 
     // Otherwise hovering the icon shows the red "locked" mark and tooltip instead of play.
-    @Redirect(method = "extractContent", at = @At(value = "INVOKE",
+    @Redirect(method = "render", at = @At(value = "INVOKE",
             target = "Lnet/minecraft/world/level/storage/LevelSummary;isLocked()Z"))
     private boolean mcpersist$notLockedWhenInBackground(LevelSummary summary) {
         return summary.isLocked() && !mcpersist$inBackground;

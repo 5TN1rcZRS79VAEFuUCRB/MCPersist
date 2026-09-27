@@ -6,7 +6,7 @@ import net.minecraft.client.User;
 import net.minecraft.client.gui.screens.AlertScreen;
 import net.minecraft.client.gui.screens.ConfirmScreen;
 import net.minecraft.client.gui.screens.ConnectScreen;
-import net.minecraft.client.gui.screens.GenericMessageScreen;
+import net.minecraft.client.gui.screens.GenericDirtMessageScreen;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.network.chat.Component;
 import net.minecraft.client.multiplayer.ServerData;
@@ -32,7 +32,7 @@ public final class BackgroundServers {
     }
 
     private static Path worldDir(String levelId) {
-        return Minecraft.getInstance().getLevelSource().getLevelPath(levelId);
+        return Minecraft.getInstance().getLevelSource().getBaseDir().resolve(levelId);
     }
 
     /** Worlds whose background server is being stopped: not joinable, though still up for a moment. */
@@ -53,16 +53,16 @@ public final class BackgroundServers {
     public static void join(Screen parent, String levelId, String worldName) throws IOException {
         int port = Handoff.localPort(serversDir(), worldDir(levelId));
         Minecraft minecraft = Minecraft.getInstance();
-        ServerData server = new ServerData(worldName, "127.0.0.1:" + port, ServerData.Type.OTHER);
-        minecraft.gui.setScreen(new GenericMessageScreen(Component.translatable("selectWorld.mcpersist.waitingForBackground")));
+        ServerData server = new ServerData(worldName, "127.0.0.1:" + port, false);
+        minecraft.setScreen(new GenericDirtMessageScreen(Component.translatable("selectWorld.mcpersist.waitingForBackground")));
         new Thread(() -> {
             boolean up = waitForStatus(port, 60_000);
             minecraft.execute(() -> {
                 if (up) {
                     joined = server;
-                    ConnectScreen.startConnecting(parent, minecraft, new ServerAddress("127.0.0.1", port), server, false, null);
+                    ConnectScreen.startConnecting(parent, minecraft, new ServerAddress("127.0.0.1", port), server, false);
                 } else {
-                    minecraft.gui.setScreen(new AlertScreen(() -> minecraft.gui.setScreen(parent),
+                    minecraft.setScreen(new AlertScreen(() -> minecraft.setScreen(parent),
                             Component.translatable("selectWorld.mcpersist.backgroundNotStarting"),
                             Component.translatable("selectWorld.mcpersist.backgroundNotStarting.message")));
                 }
@@ -174,18 +174,18 @@ public final class BackgroundServers {
     private static void showProblems(Screen screen, List<Handoff.Problem> problems, int index) {
         Minecraft minecraft = Minecraft.getInstance();
         if (index == problems.size()) {
-            minecraft.gui.setScreen(screen);
+            minecraft.setScreen(screen);
             return;
         }
         Handoff.Problem problem = problems.get(index);
         Runnable next = () -> showProblems(screen, problems, index + 1);
         Component world = Component.literal(problem.worldDir().getFileName().toString());
         if (problem.kind() == Handoff.Problem.Kind.FAILED) {
-            minecraft.gui.setScreen(new AlertScreen(next,
+            minecraft.setScreen(new AlertScreen(next,
                     Component.translatable("mcpersist.problem.failed.title", world),
                     Component.translatable("mcpersist.problem.failed.message", problem.log().toString())));
         } else {
-            minecraft.gui.setScreen(new ConfirmScreen(start -> {
+            minecraft.setScreen(new ConfirmScreen(start -> {
                 if (start) {
                     User user = minecraft.getUser();
                     Handoff.Player host = new Handoff.Player(user.getProfileId(), user.getName());

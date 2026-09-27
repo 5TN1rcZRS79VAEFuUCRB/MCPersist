@@ -37,7 +37,7 @@ public abstract class SelectWorldScreenMixin extends Screen {
                     String levelId = mcpersist$selected;
                     BackgroundServers.stop(levelId, () -> {
                         // Entries show the world as running until they're rebuilt.
-                        list.reloadWorldList();
+                        ((WorldSelectionListAccessor) list).mcpersist$reloadWorldList();
                         mcpersist$refresh(levelId);
                     });
                 }).bounds(width - 160, 6, 150, 20).build());
