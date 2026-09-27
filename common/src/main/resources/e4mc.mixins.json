@@ -29,6 +29,7 @@
     "ServerAddressMixin",
     "ServerNameResolverMixin",
     "TitleScreenMixin",
+    "WorldListEntryAccessor",
     "WorldListEntryMixin",
     "WorldSelectionListAccessor",
     "ShareToLanScreenMixin"
