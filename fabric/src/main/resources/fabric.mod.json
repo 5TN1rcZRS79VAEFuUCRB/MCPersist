@@ -20,6 +20,9 @@
   "entrypoints": {
     "main": [
       "link.e4mc.fabric.E4mcClientFabric"
+    ],
+    "voicechat": [
+      "link.e4mc.voice.VoicePlugin"
     ]
   },
   "mixins": [

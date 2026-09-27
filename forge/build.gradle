@@ -17,6 +17,7 @@ repositories {
     mavenCentral()
     maven { url 'https://repo.sleeping.town/' }
     maven { url 'https://maven.is-quite.gay/' }
+    maven { url 'https://maven.maxhenkel.de/repository/public' }
 }
 
 // The shared code, as in fabric/build.gradle.
@@ -51,6 +52,8 @@ dependencies {
     }
     implementation jarJar("dev.dirs:directories:${rootProject.dirs_version}")
     implementation jarJar('folk.sisby:kaleido-config:0.3.3+1.3.2')
+    // Simple Voice Chat, when installed, loads link.e4mc.voice.VoicePlugin.
+    compileOnly "de.maxhenkel.voicechat:voicechat-api:${rootProject.voicechat_api_version}"
     // Forge ships Mixin but not MixinExtras, which the shared mixins use.
     implementation jarJar('io.github.llamalad7:mixinextras-forge:0.5.4')
 }

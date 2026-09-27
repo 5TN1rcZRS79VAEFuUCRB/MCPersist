@@ -28,6 +28,7 @@ import net.minecraft.network.chat.ClickEvent;
 import net.minecraft.network.chat.Component;
 import net.minecraft.network.chat.HoverEvent;
 import net.minecraft.network.chat.MutableComponent;
+import link.e4mc.voice.RelayVoice;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -39,7 +40,9 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
 import java.util.List;
+import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
@@ -85,6 +88,14 @@ public class QuiclimeSession {
             String kind = "handing_off";
         }
 
+        public static class VoiceRegisterPlayerMessageServerbound implements ControlMessage {
+            String kind = "voice_register_player";
+            String uuid;
+            public VoiceRegisterPlayerMessageServerbound(UUID uuid) {
+                this.uuid = uuid.toString();
+            }
+        }
+
         public static class HandedOffMessageClientbound implements ControlMessage {
             String kind = "handed_off";
         }
@@ -116,6 +127,8 @@ public class QuiclimeSession {
         public static class HasCapabilitiesMessageClientbound implements ControlMessage {
             String kind = "has_capabilities";
             String[] caps;
+            // The UDP port players send voice to, from relays that carry it.
+            Integer voice_port;
             public HasCapabilitiesMessageClientbound(String[] caps) {
                 this.caps = caps;
             }
@@ -201,6 +214,8 @@ public class QuiclimeSession {
     final String worldKey;
     /** The address the relay assigned, once assigned. */
     public volatile String domain;
+    /** The relay's port for players' Simple Voice Chat traffic, if it carries it. */
+    public volatile Integer voicePort;
     private volatile QuicStreamChannel controlChannel;
     private final CompletableFuture<Void> handedOff = new CompletableFuture<>();
 
@@ -255,6 +270,8 @@ public class QuiclimeSession {
                     .initialMaxStreamDataBidirectionalRemote(1250000)
                     .initialMaxStreamDataBidirectionalLocal(1250000)
                     .initialMaxStreamDataUnidirectional(1250000)
+                    // Simple Voice Chat traffic of players who joined through the relay.
+                    .datagram(1024, 1024)
                     .build();
             Class<? extends DatagramChannel> channelClass = null;
             if (group instanceof EpollEventLoopGroup) {
@@ -300,6 +317,20 @@ public class QuiclimeSession {
                             public void channelInactive(ChannelHandlerContext ctx) throws Exception {
                                 super.channelInactive(ctx);
                                 state = State.STOPPED;
+                            }
+
+                            // QUIC datagrams: voice from players who joined through the relay.
+                            @Override
+                            public void channelRead(ChannelHandlerContext ctx, Object msg) {
+                                if (msg instanceof ByteBuf datagram) {
+                                    try {
+                                        RelayVoice.received(datagram);
+                                    } finally {
+                                        datagram.release();
+                                    }
+                                } else {
+                                    ctx.fireChannelRead(msg);
+                                }
                             }
                         })
                         .remoteAddress(new InetSocketAddress(relay, relayPort))
@@ -362,7 +393,11 @@ public class QuiclimeSession {
                                             addMessage(Component.literal(((ControlMessageCodec.RequestMessageBroadcastMessageClientbound) msg).message));
                                         }
                                     }
-                                    if (msg instanceof ControlMessageCodec.HasCapabilitiesMessageClientbound) {
+                                    if (msg instanceof ControlMessageCodec.HasCapabilitiesMessageClientbound caps) {
+                                        if (Arrays.asList(caps.caps).contains("voice")) {
+                                            voicePort = caps.voice_port;
+                                            LOGGER.info("Relay carries voice chat on port {}", voicePort);
+                                        }
                                         var streamChannel = ctx.channel();
                                         boolean hasDialtoneSidecar = false;
                                         for (String cap : ((ControlMessageCodec.HasCapabilitiesMessageClientbound) msg).caps) {
@@ -464,6 +499,22 @@ public class QuiclimeSession {
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             return false;
+        }
+    }
+
+    /** Has the relay send this player's voice here. */
+    public void registerVoicePlayer(UUID player) {
+        QuicStreamChannel channel = controlChannel;
+        if (channel != null && channel.isActive()) {
+            channel.writeAndFlush(new ControlMessageCodec.VoiceRegisterPlayerMessageServerbound(player));
+        }
+    }
+
+    /** Voice for a player who joined through the relay. */
+    public void sendVoice(RelayVoice.Player player, byte[] packet) {
+        QuicChannel channel = quicChannel;
+        if (channel != null && channel.isActive()) {
+            channel.writeAndFlush(RelayVoice.frame(player, packet));
         }
     }
 
