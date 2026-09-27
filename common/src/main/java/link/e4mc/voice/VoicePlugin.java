@@ -8,7 +8,10 @@ import de.maxhenkel.voicechat.api.events.VoicechatServerStartingEvent;
 import io.netty.incubator.codec.quic.QuicStreamAddress;
 import link.e4mc.E4mcClient;
 import link.e4mc.QuiclimeSession;
+import link.e4mc.dialtone.DialtoneAddress;
 import net.minecraft.server.level.ServerPlayer;
+
+import java.net.SocketAddress;
 
 /**
  * Carries Simple Voice Chat through the relay for players who joined through it. Only that
@@ -29,13 +32,18 @@ public class VoicePlugin implements VoicechatPlugin {
         registration.registerEvent(VoiceHostEvent.class, VoicePlugin::relayVoiceHost);
     }
 
-    /** A player who joined through the relay sends voice to it, at the address they joined. */
+    /**
+     * A player who joined through the relay, or peer-to-peer over Dialtone after looking the
+     * world up there, sends voice to the relay at the address they joined.
+     */
     private static void relayVoiceHost(VoiceHostEvent event) {
         QuiclimeSession session = E4mcClient.session;
         Integer port = session == null ? null : session.voicePort;
-        if (port == null
-                || !(event.getPlayer().getPlayer() instanceof ServerPlayer player)
-                || !(player.connection.getRemoteAddress() instanceof QuicStreamAddress)) {
+        if (port == null || !(event.getPlayer().getPlayer() instanceof ServerPlayer player)) {
+            return;
+        }
+        SocketAddress from = player.connection.getRemoteAddress();
+        if (!(from instanceof QuicStreamAddress || from instanceof DialtoneAddress)) {
             return;
         }
         session.registerVoicePlayer(player.getUUID());
