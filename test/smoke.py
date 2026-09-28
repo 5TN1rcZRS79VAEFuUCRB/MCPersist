@@ -247,6 +247,7 @@ def start_relay(relay_bin, root):
     )
     quic_port = free_port()
     mc_port = free_port()
+    web_port = free_port()
     env = dict(
         os.environ,
         QUICLIME_CERT_PATH=str(root / "cert.pem"),
@@ -254,7 +255,7 @@ def start_relay(relay_bin, root):
         QUICLIME_BASE_DOMAIN=BASE_DOMAIN,
         QUICLIME_DB_PATH=str(root / "names.sqlite"),
         QUICLIME_BIND_ADDR_QUIC=f"127.0.0.1:{quic_port}",
-        QUICLIME_BIND_ADDR_WEB=f"127.0.0.1:{free_port()}",
+        QUICLIME_BIND_ADDR_WEB=f"127.0.0.1:{web_port}",
         QUICLIME_BIND_ADDR_MC=f"127.0.0.1:{mc_port}",
         QUICLIME_BIND_ADDR_VOICE=f"127.0.0.1:{free_port()}",
         RUST_LOG="info",
@@ -267,7 +268,7 @@ def start_relay(relay_bin, root):
         f"relayPort = {quic_port}\n"
         "dialtoneHostEnabled = false\n"
     )
-    return relay, jvm_args, mod_config, mc_port
+    return relay, jvm_args, mod_config, mc_port, web_port
 
 
 def run_for_domain(root, jvm_args):
@@ -283,7 +284,7 @@ def run_for_domain(root, jvm_args):
 def test_stable_address(cache, relay_bin):
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
-        relay, jvm_args, mod_config, _ = start_relay(relay_bin, root)
+        relay, jvm_args, mod_config, _, _ = start_relay(relay_bin, root)
         try:
             server_root = root / "server"
             server_root.mkdir()
@@ -326,7 +327,7 @@ def test_relayed_leave(cache, relay_bin):
     """A player who joins through the relay and leaves is dropped at once, not after the 30 s timeout."""
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
-        relay, jvm_args, mod_config, mc_port = start_relay(relay_bin, root)
+        relay, jvm_args, mod_config, mc_port, web_port = start_relay(relay_bin, root)
         try:
             server_root = root / "server"
             server_root.mkdir()
@@ -340,6 +341,11 @@ def test_relayed_leave(cache, relay_bin):
                 fail("the mod didn't learn the relay's voice chat port", server)
             if not any("Done (" in logged for logged in server.log):
                 server.wait_for("Done (", timeout=300)
+            # Longer than the single length byte of e4mc's framing could count.
+            announcement = "Relay maintenance at noon UTC, back within minutes. " * 5
+            urllib.request.urlopen(urllib.request.Request(
+                f"http://127.0.0.1:{web_port}/broadcast", data=announcement.encode(), method="POST"), timeout=10)
+            server.wait_for(f"Relay announcement: {announcement}", timeout=15)
             host = domain.encode()
             with socket.create_connection(("127.0.0.1", mc_port), timeout=15) as player:
                 # Handshake for 26.3 (protocol 777), then Login Start as an offline-mode player.
@@ -357,7 +363,8 @@ def test_relayed_leave(cache, relay_bin):
             relay.kill()
     if took > 5:
         fail(f"a player who left through the relay stayed for {took:.0f} s: {line.strip()}")
-    print(f"PASS: a player who left through the relay was dropped after {took:.1f} s")
+    print(f"PASS: a player who left through the relay was dropped after {took:.1f} s, and a "
+          f"{len(announcement)}-byte relay announcement arrived whole")
 
 
 def process_alive(pid):
@@ -451,7 +458,7 @@ def test_handoff(cache, relay_bin):
         root = Path(tmp)
         relay = None
         if relay_bin:
-            relay, jvm_args, mod_config, _ = start_relay(relay_bin, root)
+            relay, jvm_args, mod_config, _, _ = start_relay(relay_bin, root)
             # The handoff runs the server with the game's JVM settings, not the test's, so
             # trust the relay's certificate through the JVM's environment instead.
             os.environ["JAVA_TOOL_OPTIONS"] = " ".join(jvm_args)

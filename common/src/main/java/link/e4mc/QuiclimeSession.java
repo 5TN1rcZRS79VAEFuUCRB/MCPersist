@@ -17,6 +17,7 @@ import io.netty.channel.nio.NioIoHandler;
 import io.netty.channel.socket.DatagramChannel;
 import io.netty.channel.socket.nio.NioDatagramChannel;
 import io.netty.handler.codec.ByteToMessageCodec;
+import io.netty.handler.codec.DecoderException;
 import io.netty.incubator.codec.quic.*;
 import link.e4mc.dialtone.DialtoneAddress;
 import link.e4mc.dialtone.DialtoneServerChannel;
@@ -130,16 +131,34 @@ public class QuiclimeSession {
 
         @Override
         protected void decode(ChannelHandlerContext ctx, ByteBuf in, List<Object> out) {
-            int size = in.getByte(in.readerIndex());
-            if (in.readableBytes() >= size + 1) {
-                in.skipBytes(1);
-                var buf = new byte[size];
-                in.readBytes(buf);
-                var json = gson.fromJson(new String(buf, StandardCharsets.UTF_8), JsonObject.class);
-                var type = CLIENTBOUND.get(json.get("kind").getAsString());
-                if (type != null) {
-                    out.add(gson.fromJson(json, type));
+            // Framed like encode: the JSON's length as a varint (e4mc's single byte only
+            // counted to 127), then the JSON. Until all of it has arrived, wait for more.
+            in.markReaderIndex();
+            int size = 0;
+            for (int shift = 0; ; shift += 7) {
+                if (shift == 35) {
+                    throw new DecoderException("Control message length is not a varint");
                 }
+                if (!in.isReadable()) {
+                    in.resetReaderIndex();
+                    return;
+                }
+                byte b = in.readByte();
+                size |= (b & 0x7F) << shift;
+                if ((b & 0x80) == 0) {
+                    break;
+                }
+            }
+            if (in.readableBytes() < size) {
+                in.resetReaderIndex();
+                return;
+            }
+            var buf = new byte[size];
+            in.readBytes(buf);
+            var json = gson.fromJson(new String(buf, StandardCharsets.UTF_8), JsonObject.class);
+            var type = CLIENTBOUND.get(json.get("kind").getAsString());
+            if (type != null) {
+                out.add(gson.fromJson(json, type));
             }
         }
     }
@@ -357,7 +376,8 @@ public class QuiclimeSession {
                                             }
                                         }
                                     }
-                                    if (msg instanceof ControlMessageCodec.RequestMessageBroadcastMessageClientbound) {
+                                    if (msg instanceof ControlMessageCodec.RequestMessageBroadcastMessageClientbound broadcast) {
+                                        LOGGER.info("Relay announcement: {}", broadcast.message);
                                         if (Agnos.isClient()) {
                                             addMessage(Component.literal(((ControlMessageCodec.RequestMessageBroadcastMessageClientbound) msg).message));
                                         }
