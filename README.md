@@ -13,6 +13,12 @@ as a headless server in the background on your machine, and it keeps the same ad
 
 > **Status: alpha.** Built for Minecraft 26.3. Expect rough edges.
 
+> **AI disclosure.** MCPersist is written with heavy use of AI (Claude, which shows up in the contributors
+> list). I decide what it does and test it in-game with friends, but most of the code and text is
+> AI-written. Back up your worlds. If you'd rather not use AI-assisted software, that's fair:
+> [e4mc](https://github.com/vgskye/e4mc-minecraft-architectury), which this is forked from and which doesn't
+> accept AI contributions, is a good choice when you don't need the world to keep running.
+
 ## Joining a world
 
 Shared worlds use a whitelist. Before a friend joins for the first time, the host runs
