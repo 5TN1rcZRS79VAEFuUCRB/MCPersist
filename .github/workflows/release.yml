@@ -63,7 +63,8 @@ jobs:
         run: |
           case "$VERSION" in *alpha*) type=alpha ;; *beta*|*rc*) type=beta ;; *) type=release ;; esac
           api=https://minecraft.curseforge.com/api
-          # CurseForge tags files with its own IDs for the Minecraft version and the loader.
+          # CurseForge tags files with its own IDs for the Minecraft version, the loader and the side
+          # (required): Client, as only the host installs it; its background server copies it along.
           curl --fail-with-body -sS "$api/game/versions" -H "X-Api-Token: $CURSEFORGE_TOKEN" > versions.json
           version_id() {
             id=$(jq --arg name "$1" '[.[] | select(.name == $name)][0].id' versions.json)
@@ -71,15 +72,16 @@ jobs:
             echo "$id"
           }
           mc=$(version_id "$MINECRAFT")
+          client=$(version_id Client)
           for loader in fabric neoforge forge; do
             case "$loader" in fabric) name=Fabric ;; neoforge) name=NeoForge ;; forge) name=Forge ;; esac
             relations='{"projects": []}'
             [ "$loader" = fabric ] && relations='{"projects": [{"slug": "fabric-api", "type": "requiredDependency"}]}'
             jq -n --arg version "$VERSION" --arg type "$type" --arg loader "$loader" \
-                --argjson mc "$mc" --argjson loaderId "$(version_id "$name")" --argjson relations "$relations" '{
+                --argjson mc "$mc" --argjson client "$client" --argjson loaderId "$(version_id "$name")" --argjson relations "$relations" '{
               displayName: "MCPersist \($version) (\($loader))", releaseType: $type,
               changelog: "https://github.com/5TN1rcZRS79VAEFuUCRB/MCPersist/releases/tag/v\($version)",
-              changelogType: "markdown", gameVersions: [$mc, $loaderId], relations: $relations
+              changelogType: "markdown", gameVersions: [$mc, $loaderId, $client], relations: $relations
             }' > metadata.json
             curl --fail-with-body -sS "$api/projects/$PROJECT/upload-file" -H "X-Api-Token: $CURSEFORGE_TOKEN" \
               -F "metadata=<metadata.json;type=application/json" -F "file=@$loader/build/libs/mcpersist-$loader-$VERSION.jar"
