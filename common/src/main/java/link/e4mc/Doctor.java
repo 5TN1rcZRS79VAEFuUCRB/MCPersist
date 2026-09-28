@@ -33,29 +33,13 @@ public class Doctor {
         } else {
             result.append("none recorded.\n");
         }
-        result.append("natives CDN test results:\n");
+        result.append("natives mirror test results:\n");
         try {
-            var httpClient = HttpClient.newHttpClient();
-            var request = HttpRequest
-                    .newBuilder(new URI("https://natives.e4mc.link/doctor-test-target"))
+            var request = HttpRequest.newBuilder(new URI(System.getProperty("link.e4mc.native_url")))
+                    .method("HEAD", HttpRequest.BodyPublishers.noBody())
                     .build();
-            var response = httpClient.send(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
-            var exceptional = false;
-            if (response.statusCode() != 200) {
-                exceptional = true;
-                result.append("status code was not 200, it was: ");
-                result.append(response.statusCode());
-                result.append("\n");
-            }
-            if (!response.body().equals("if you can read this, e4mc natives are available. qmqj8c13nzdr0kd10gihcila")) {
-                exceptional = true;
-                result.append("response was unexpected, got: ");
-                result.append(response.body());
-                result.append("\n");
-            }
-            if (!exceptional) {
-                result.append("no issues found.\n");
-            }
+            int status = HttpClient.newHttpClient().send(request, HttpResponse.BodyHandlers.discarding()).statusCode();
+            result.append(status == 200 ? "no issues found.\n" : "status code was not 200, it was: " + status + "\n");
         } catch (Exception e) {
             result.append("exception during request:\n");
             result.append(stackTrace(e));

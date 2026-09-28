@@ -2,6 +2,7 @@ package link.e4mc;
 
 import com.mojang.brigadier.CommandDispatcher;
 import com.mojang.brigadier.exceptions.CommandSyntaxException;
+import io.netty.util.internal.PlatformDependent;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.commands.Commands;
 import net.minecraft.network.chat.Component;
@@ -17,6 +18,20 @@ public class E4mcClient {
 
     public static void init() {
         Config.INSTANCE.id(); // Loads the config, writing the file if it's missing
+        // QUIC (for the relay) and iroh-java (for peer-to-peer) download their native libraries
+        // on first use, from e4mc's CDN unless told otherwise; ours mirrors them. Each checks the
+        // file's SHA-256 either way. The suffixes are their native builds: when either library
+        // is updated, update its suffix here and the files on the mirror.
+        mirrorNative("link.e4mc.native_url", "netty_quiche", "74");
+        mirrorNative("link.e4mc.dialtone.native_url", "iroh_java", "57caf9a");
+    }
+
+    private static void mirrorNative(String urlProperty, String library, String build) {
+        if (System.getProperty(urlProperty) == null) {
+            String file = System.mapLibraryName(library + "_" + PlatformDependent.normalizedOs() + "_"
+                    + PlatformDependent.normalizedArch() + "_" + build);
+            System.setProperty(urlProperty, "https://mcpersist.com/natives/" + file);
+        }
     }
 
     public static void registerCommands(CommandDispatcher<CommandSourceStack> dispatcher) {
