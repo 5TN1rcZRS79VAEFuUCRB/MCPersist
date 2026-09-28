@@ -255,7 +255,26 @@ public class QuiclimeSession {
                 }
                 datagramChannel = (DatagramChannel) ((ChannelFuture) datagramChannelFuture).channel();
                 QuicChannel.newBootstrap(datagramChannel)
-                        .streamHandler(handler)
+                        .streamHandler(new ChannelInitializer<QuicStreamChannel>() {
+                            @Override
+                            protected void initChannel(QuicStreamChannel ch) {
+                                // The relay resets a player's stream when they leave. Handed to the
+                                // game as an error, it answers with a disconnect packet and waits for
+                                // it to be sent, which on a stream that's already gone can never
+                                // happen: the player stayed until the 30 s read timeout. Closing the
+                                // stream drops them at once.
+                                ch.pipeline().addLast(new ChannelInboundHandlerAdapter() {
+                                    @Override
+                                    public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
+                                        if (cause instanceof QuicException) {
+                                            ctx.close();
+                                        } else {
+                                            ctx.fireExceptionCaught(cause);
+                                        }
+                                    }
+                                }, handler);
+                            }
+                        })
                         .handler(new ChannelInboundHandlerAdapter() {
                             @Override
                             public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) throws Exception {
