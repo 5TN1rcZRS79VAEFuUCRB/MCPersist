@@ -193,9 +193,7 @@ public class QuiclimeSession {
                 .newBuilder(new URI(Config.INSTANCE.dialtoneRelayMap.value()))
                 .header("Accept", "application/json")
                 .build();
-        LOGGER.info("relaymap req: {}", request);
         var response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
-        LOGGER.info("relaymap resp: {}", response);
         if (response.statusCode() != 200) {
             throw new RuntimeException();
         }

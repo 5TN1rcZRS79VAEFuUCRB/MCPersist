@@ -16,7 +16,7 @@ public class E4mcClient {
     public static final Logger LOGGER = LoggerFactory.getLogger(E4mcClient.MOD_ID);
 
     public static void init() {
-        Config.INSTANCE.id(); // Touch to initialize for McQoy
+        Config.INSTANCE.id(); // Loads the config, writing the file if it's missing
     }
 
     public static void registerCommands(CommandDispatcher<CommandSourceStack> dispatcher) {
