@@ -21,6 +21,8 @@ jobs:
         run: |
           version="${GITHUB_REF_NAME#v}"
           echo "VERSION=$version" >> "$GITHUB_ENV"
+          case "$version" in *alpha*) type=alpha ;; *beta*|*rc*) type=beta ;; *) type=release ;; esac
+          echo "TYPE=$type" >> "$GITHUB_ENV"
           echo "MINECRAFT=$(grep '^minecraft_version=' gradle.properties | cut -d= -f2)" >> "$GITHUB_ENV"
           sh ./gradlew build -Pmod_version="$version"
       - name: GitHub release
@@ -37,12 +39,11 @@ jobs:
         env:
           PROJECT: ${{ vars.MODRINTH_PROJECT_ID }}
         run: |
-          case "$VERSION" in *alpha*) type=alpha ;; *beta*|*rc*) type=beta ;; *) type=release ;; esac
           # One Modrinth version per loader, each with its own jar. Only Fabric's needs another mod.
           for loader in fabric neoforge forge; do
             deps='[]'
             [ "$loader" = fabric ] && deps='[{"project_id": "P7dR8mSH", "dependency_type": "required"}]'
-            jq -n --arg project "$PROJECT" --arg version "$VERSION" --arg type "$type" --arg mc "$MINECRAFT" \
+            jq -n --arg project "$PROJECT" --arg version "$VERSION" --arg type "$TYPE" --arg mc "$MINECRAFT" \
                 --arg loader "$loader" --argjson deps "$deps" '{
               project_id: $project, name: "MCPersist \($version) (\($loader))", version_number: "\($version)+\($loader)",
               version_type: $type, changelog: "https://github.com/5TN1rcZRS79VAEFuUCRB/MCPersist/releases/tag/v\($version)",
@@ -61,7 +62,6 @@ jobs:
         env:
           PROJECT: ${{ vars.CURSEFORGE_PROJECT_ID }}
         run: |
-          case "$VERSION" in *alpha*) type=alpha ;; *beta*|*rc*) type=beta ;; *) type=release ;; esac
           api=https://minecraft.curseforge.com/api
           # CurseForge tags files with its own IDs for the Minecraft version, the loader and the side
           # (required): Client, as only the host installs it; its background server copies it along.
@@ -76,7 +76,7 @@ jobs:
           for loader in fabric neoforge forge; do
             case "$loader" in fabric) name=Fabric ;; neoforge) name=NeoForge ;; forge) name=Forge ;; esac
             # Only Fabric's needs another mod; CurseForge refuses an empty list of relations.
-            jq -n --arg version "$VERSION" --arg type "$type" --arg loader "$loader" \
+            jq -n --arg version "$VERSION" --arg type "$TYPE" --arg loader "$loader" \
                 --argjson mc "$mc" --argjson client "$client" --argjson loaderId "$(version_id "$name")" '{
               displayName: "MCPersist \($version) (\($loader))", releaseType: $type,
               changelog: "https://github.com/5TN1rcZRS79VAEFuUCRB/MCPersist/releases/tag/v\($version)",
