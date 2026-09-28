@@ -1,5 +1,9 @@
 name: build
-on: [push, pull_request]
+on:
+  # Not tags: a release tags a commit whose branch push already ran this.
+  push:
+    branches: ["**"]
+  pull_request:
 jobs:
   build:
     runs-on: ubuntu-latest
