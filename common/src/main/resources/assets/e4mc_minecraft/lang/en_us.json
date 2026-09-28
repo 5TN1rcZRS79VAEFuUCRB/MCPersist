@@ -9,7 +9,7 @@
     "text.mcpersist.addressInUse": "This world's address is already in use. Is a copy of this world open somewhere else?",
     "text.mcpersist.addressRefused": "The MCPersist relay couldn't give this world its address.",
     "options.mcpersist.persistent": "Keep running after I leave",
-    "options.mcpersist.persistent.tooltip": "When you leave this world, it keeps running as a Minecraft server in the background on this computer, at a permanent address. Turning this on accepts the Minecraft EULA (aka.ms/MinecraftEULA) for that server.",
+    "options.mcpersist.persistent.tooltip": "When you leave this world, it keeps running as a Minecraft server in the background on this computer, at a permanent address, and starts again whenever you log in, until you click Stop Background Server in the world list. Turning this on accepts the Minecraft EULA (aka.ms/MinecraftEULA) for that server.",
     "selectWorld.mcpersist.resetAddress": "Reset MCPersist Address",
     "selectWorld.mcpersist.resetAddress.title": "Give this world a new address?",
     "selectWorld.mcpersist.resetAddress.message": "Anyone using the old address won't be able to join any more. Share the new one with your friends after opening the world.",
