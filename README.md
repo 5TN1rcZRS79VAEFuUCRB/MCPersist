@@ -44,8 +44,8 @@ MCPersist can't be installed alongside e4mc.
 
 ## Running costs
 
-The relay that carries worlds, voice chat and peer-to-peer connections costs about $6 a month: $5
-for the server and $1 for the domain, paid out of pocket. MCPersist is free, and if it's useful to you,
+The relays that carry worlds, voice chat and peer-to-peer connections cost about $11 a month: a server
+in Chicago and one in Frankfurt at $5 each, plus $1 for the domain, paid out of pocket. MCPersist is free, and if it's useful to you,
 donations help keep it that way:
 
 [![Support MCPersist on Ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/imivbqcwzjgpvb80cg9t)
