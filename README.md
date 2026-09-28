@@ -45,7 +45,8 @@ MCPersist v1, the Windows app, is discontinued and its relay is shut down. Its c
   - NeoForge
   - Forge
 
-Download the jar for your loader. A world's background server runs the same loader and mods as the
+Download the jar for your loader from [Modrinth](https://modrinth.com/mod/mcpersist),
+[CurseForge](https://www.curseforge.com/minecraft/mc-mods/mcpersist) or [GitHub Releases](../../releases). A world's background server runs the same loader and mods as the
 game that hands it off; the first handoff installs that loader's server, which takes up to a minute.
 
 MCPersist can't be installed alongside e4mc.
@@ -75,11 +76,12 @@ test that loader.
 
 Push a tag named after the version, e.g. `git tag v2.0.0-alpha.2 && git push origin v2.0.0-alpha.2`. The
 release workflow builds the three jars with that version, attaches them to a GitHub Release, and publishes
-one Modrinth version per loader (numbered `<version>+<loader>`).
+one Modrinth version per loader (numbered `<version>+<loader>`) and one CurseForge file per loader.
 
 The Modrinth step runs once the repository has a `MODRINTH_TOKEN` secret (a Modrinth personal access token
 with the "Create versions" scope) and a `MODRINTH_PROJECT_ID` variable (the project's ID from its Modrinth
-settings). Until then it's skipped.
+settings). Until then it's skipped. Likewise the CurseForge step needs a `CURSEFORGE_TOKEN` secret (an API
+token from CurseForge's account settings) and a `CURSEFORGE_PROJECT_ID` variable (the project's number).
 
 ## Credits and license
 
