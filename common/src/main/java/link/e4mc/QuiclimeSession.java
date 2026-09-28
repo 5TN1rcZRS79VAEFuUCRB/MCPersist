@@ -5,6 +5,7 @@ import com.google.gson.JsonObject;
 import io.netty.bootstrap.Bootstrap;
 import io.netty.bootstrap.ServerBootstrap;
 import io.netty.buffer.ByteBuf;
+import io.netty.buffer.Unpooled;
 import io.netty.channel.*;
 import io.netty.channel.epoll.EpollDatagramChannel;
 import io.netty.channel.epoll.EpollEventLoopGroup;
@@ -16,8 +17,7 @@ import io.netty.channel.nio.NioEventLoopGroup;
 import io.netty.channel.nio.NioIoHandler;
 import io.netty.channel.socket.DatagramChannel;
 import io.netty.channel.socket.nio.NioDatagramChannel;
-import io.netty.handler.codec.ByteToMessageCodec;
-import io.netty.handler.codec.DecoderException;
+import io.netty.handler.codec.MessageToMessageCodec;
 import io.netty.incubator.codec.quic.*;
 import link.e4mc.dialtone.DialtoneAddress;
 import link.e4mc.dialtone.DialtoneServerChannel;
@@ -25,6 +25,8 @@ import link.e4mc.iroh.Endpoint;
 import net.minecraft.ChatFormatting;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.Minecraft;
+import net.minecraft.network.Varint21FrameDecoder;
+import net.minecraft.network.Varint21LengthFieldPrepender;
 import net.minecraft.network.chat.ClickEvent;
 import net.minecraft.network.chat.Component;
 import net.minecraft.network.chat.HoverEvent;
@@ -57,7 +59,7 @@ public class QuiclimeSession {
     private static final Logger LOGGER = LoggerFactory.getLogger(E4mcClient.MOD_ID);
     final ChannelHandler handler;
 
-    private static class ControlMessageCodec extends ByteToMessageCodec<ControlMessageCodec.ControlMessage> {
+    private static class ControlMessageCodec extends MessageToMessageCodec<ByteBuf, ControlMessageCodec.ControlMessage> {
         public interface ControlMessage {}
 
         public static class ProbeCapabilitiesMessageServerbound implements ControlMessage {
@@ -122,40 +124,15 @@ public class QuiclimeSession {
                 "has_capabilities", HasCapabilitiesMessageClientbound.class,
                 "handed_off", HandedOffMessageClientbound.class);
 
+        // One message per frame: Minecraft's own varint-length framing sits ahead of this codec.
         @Override
-        protected void encode(ChannelHandlerContext ctx, ControlMessage msg, ByteBuf out) {
-            byte[] json = gson.toJson(msg).getBytes(StandardCharsets.UTF_8);
-            writeVarInt(out, json.length);
-            out.writeBytes(json);
+        protected void encode(ChannelHandlerContext ctx, ControlMessage msg, List<Object> out) {
+            out.add(Unpooled.wrappedBuffer(gson.toJson(msg).getBytes(StandardCharsets.UTF_8)));
         }
 
         @Override
         protected void decode(ChannelHandlerContext ctx, ByteBuf in, List<Object> out) {
-            // Framed like encode: the JSON's length as a varint (e4mc's single byte only
-            // counted to 127), then the JSON. Until all of it has arrived, wait for more.
-            in.markReaderIndex();
-            int size = 0;
-            for (int shift = 0; ; shift += 7) {
-                if (shift == 35) {
-                    throw new DecoderException("Control message length is not a varint");
-                }
-                if (!in.isReadable()) {
-                    in.resetReaderIndex();
-                    return;
-                }
-                byte b = in.readByte();
-                size |= (b & 0x7F) << shift;
-                if ((b & 0x80) == 0) {
-                    break;
-                }
-            }
-            if (in.readableBytes() < size) {
-                in.resetReaderIndex();
-                return;
-            }
-            var buf = new byte[size];
-            in.readBytes(buf);
-            var json = gson.fromJson(new String(buf, StandardCharsets.UTF_8), JsonObject.class);
+            var json = gson.fromJson(in.toString(StandardCharsets.UTF_8), JsonObject.class);
             var type = CLIENTBOUND.get(json.get("kind").getAsString());
             if (type != null) {
                 out.add(gson.fromJson(json, type));
@@ -333,7 +310,7 @@ public class QuiclimeSession {
                             new ChannelInitializer<QuicStreamChannel>() {
                                 @Override
                                 protected void initChannel(QuicStreamChannel ch) {
-                            ch.pipeline().addLast(new ControlMessageCodec(), new SimpleChannelInboundHandler<ControlMessageCodec.ControlMessage>() {
+                            ch.pipeline().addLast(new Varint21FrameDecoder(null), new Varint21LengthFieldPrepender(), new ControlMessageCodec(), new SimpleChannelInboundHandler<ControlMessageCodec.ControlMessage>() {
                                 @Override
                                 protected void channelRead0(ChannelHandlerContext ctx, ControlMessageCodec.ControlMessage msg) {
                                     if (msg instanceof ControlMessageCodec.HandedOffMessageClientbound) {
@@ -509,14 +486,4 @@ public class QuiclimeSession {
         afterCloseIfPresent(dialtoneChannel, q -> afterCloseIfPresent(quicChannel, a -> afterCloseIfPresent(datagramChannel, b -> state = State.STOPPED)));
     }
 
-
-    private static ByteBuf writeVarInt(ByteBuf buf, int value) {
-        while ((value & 0xffffff80) != 0) {
-            buf.writeByte(value & 0x7F | 0x80);
-            value >>>= 7;
-        }
-
-        buf.writeByte(value);
-        return buf;
-    }
 }

@@ -1,5 +1,8 @@
 package link.e4mc;
 
+import io.netty.buffer.ByteBuf;
+import io.netty.buffer.ByteBufUtil;
+import io.netty.buffer.Unpooled;
 import link.e4mc.handoff.Handoff;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.User;
@@ -8,11 +11,11 @@ import net.minecraft.client.gui.screens.ConfirmScreen;
 import net.minecraft.client.gui.screens.ConnectScreen;
 import net.minecraft.client.gui.screens.GenericMessageScreen;
 import net.minecraft.client.gui.screens.Screen;
+import net.minecraft.network.VarInt;
 import net.minecraft.network.chat.Component;
 import net.minecraft.client.multiplayer.ServerData;
 import net.minecraft.client.multiplayer.resolver.ServerAddress;
 
-import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.net.InetAddress;
@@ -74,14 +77,6 @@ public final class BackgroundServers {
      * The port opens before the server is up, and logins are dropped until its first tick;
      * a server-list ping is only answered from then on.
      */
-    private static void writeVarInt(ByteArrayOutputStream out, int value) {
-        while ((value & ~0x7F) != 0) {
-            out.write((value & 0x7F) | 0x80);
-            value >>>= 7;
-        }
-        out.write(value);
-    }
-
     private static boolean waitForStatus(int port, long timeoutMillis) {
         long deadline = System.currentTimeMillis() + timeoutMillis;
         while (System.currentTimeMillis() < deadline) {
@@ -91,19 +86,17 @@ public final class BackgroundServers {
                 socket.connect(new InetSocketAddress(InetAddress.getByName("127.0.0.1"), port), 1000);
                 socket.setSoTimeout(2000);
                 byte[] host = "127.0.0.1".getBytes(StandardCharsets.UTF_8);
-                ByteArrayOutputStream handshake = new ByteArrayOutputStream();
-                writeVarInt(handshake, 0);
-                writeVarInt(handshake, -1);
-                writeVarInt(handshake, host.length);
-                handshake.write(host);
-                handshake.write(port >> 8);
-                handshake.write(port);
-                writeVarInt(handshake, 1);
-                ByteArrayOutputStream out = new ByteArrayOutputStream();
-                writeVarInt(out, handshake.size());
-                handshake.writeTo(out);
-                out.write(new byte[]{1, 0});
-                socket.getOutputStream().write(out.toByteArray());
+                ByteBuf handshake = Unpooled.buffer();
+                VarInt.write(handshake, 0);
+                VarInt.write(handshake, -1);
+                VarInt.write(handshake, host.length);
+                handshake.writeBytes(host).writeShort(port);
+                VarInt.write(handshake, 1);
+                ByteBuf out = VarInt.write(Unpooled.buffer(), handshake.readableBytes()).writeBytes(handshake);
+                out.writeBytes(new byte[]{1, 0});
+                socket.getOutputStream().write(ByteBufUtil.getBytes(out));
+                handshake.release();
+                out.release();
                 byte[] reply = socket.getInputStream().readNBytes(64);
                 if (new String(reply, StandardCharsets.UTF_8).contains("{")) {
                     return true;
