@@ -27,7 +27,9 @@ manage it while you're playing, since changes made on the background server are 
 handoff.
 
 Anyone can join with an unmodded client: they just type the world's address. Their connection is carried
-by the MCPersist relay, which adds a bit of latency.
+by the MCPersist relay, which adds a bit of latency. There are relays in Chicago and Frankfurt, and the host's
+game picks the closer one; if a world can't be reached, check the
+[relay status page](https://stats.uptimerobot.com/zCMpp0FH4u).
 
 **Players should install MCPersist too if they can.** With the mod, a player connects to the world
 peer-to-peer instead of through the relay, which is usually faster and more stable. This works the same
