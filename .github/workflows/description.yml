@@ -1,0 +1,23 @@
+name: description
+on:
+  push:
+    branches: [main]
+    paths: [docs/description.md]
+  workflow_dispatch:
+jobs:
+  # CurseForge has no API for descriptions: paste docs/description.md into its Markdown editor by hand.
+  modrinth:
+    runs-on: ubuntu-latest
+    if: vars.MODRINTH_PROJECT_ID != ''
+    steps:
+      - uses: actions/checkout@v4
+      - name: Update the Modrinth description
+        env:
+          # A personal access token with the "Write projects" scope (and "Create versions", for releases).
+          MODRINTH_TOKEN: ${{ secrets.MODRINTH_TOKEN }}
+          PROJECT: ${{ vars.MODRINTH_PROJECT_ID }}
+        run: |
+          jq -n --rawfile body docs/description.md '{body: $body}' > body.json
+          curl --fail-with-body -sS -X PATCH "https://api.modrinth.com/v2/project/$PROJECT" \
+            -H "Authorization: $MODRINTH_TOKEN" -H "Content-Type: application/json" \
+            -H "User-Agent: MCPersist description workflow" --data @body.json
