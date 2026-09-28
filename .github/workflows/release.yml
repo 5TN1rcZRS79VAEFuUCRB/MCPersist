@@ -9,6 +9,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       MODRINTH_TOKEN: ${{ secrets.MODRINTH_TOKEN }}
+      CURSEFORGE_TOKEN: ${{ secrets.CURSEFORGE_TOKEN }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
@@ -53,4 +54,33 @@ jobs:
             curl --fail-with-body -sS https://api.modrinth.com/v2/version \
               -H "Authorization: $MODRINTH_TOKEN" -H "User-Agent: MCPersist release workflow" \
               -F "data=<data.json;type=application/json" -F "file=@$loader/build/libs/mcpersist-$loader-$VERSION.jar"
+          done
+      # Needs the CURSEFORGE_TOKEN secret and CURSEFORGE_PROJECT_ID variable; skipped until they exist.
+      - name: CurseForge
+        if: env.CURSEFORGE_TOKEN != '' && vars.CURSEFORGE_PROJECT_ID != ''
+        env:
+          PROJECT: ${{ vars.CURSEFORGE_PROJECT_ID }}
+        run: |
+          case "$VERSION" in *alpha*) type=alpha ;; *beta*|*rc*) type=beta ;; *) type=release ;; esac
+          api=https://minecraft.curseforge.com/api
+          # CurseForge tags files with its own IDs for the Minecraft version and the loader.
+          curl --fail-with-body -sS "$api/game/versions" -H "X-Api-Token: $CURSEFORGE_TOKEN" > versions.json
+          version_id() {
+            id=$(jq --arg name "$1" '[.[] | select(.name == $name)][0].id' versions.json)
+            [ "$id" != null ] || { echo "CurseForge has no game version named $1" >&2; exit 1; }
+            echo "$id"
+          }
+          mc=$(version_id "$MINECRAFT")
+          for loader in fabric neoforge forge; do
+            case "$loader" in fabric) name=Fabric ;; neoforge) name=NeoForge ;; forge) name=Forge ;; esac
+            relations='{"projects": []}'
+            [ "$loader" = fabric ] && relations='{"projects": [{"slug": "fabric-api", "type": "requiredDependency"}]}'
+            jq -n --arg version "$VERSION" --arg type "$type" --arg loader "$loader" \
+                --argjson mc "$mc" --argjson loaderId "$(version_id "$name")" --argjson relations "$relations" '{
+              displayName: "MCPersist \($version) (\($loader))", releaseType: $type,
+              changelog: "https://github.com/5TN1rcZRS79VAEFuUCRB/MCPersist/releases/tag/v\($version)",
+              changelogType: "markdown", gameVersions: [$mc, $loaderId], relations: $relations
+            }' > metadata.json
+            curl --fail-with-body -sS "$api/projects/$PROJECT/upload-file" -H "X-Api-Token: $CURSEFORGE_TOKEN" \
+              -F "metadata=<metadata.json;type=application/json" -F "file=@$loader/build/libs/mcpersist-$loader-$VERSION.jar"
           done
