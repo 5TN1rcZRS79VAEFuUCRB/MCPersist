@@ -14,12 +14,13 @@ import java.util.Properties;
 /**
  * A world's persistence settings, stored in the world folder so they travel with it
  * (backups and copies keep the address). The key is a secret: the relay gives the same
- * key the same address every time.
+ * key the same address every time. The relay is where that address lives: see {@link Relays}.
  */
 public final class WorldPersistence {
     static final String FILE = "mcpersist.properties";
     private static final String PERSISTENT = "persistent";
     private static final String KEY = "key";
+    private static final String RELAY = "relay";
     private static final SecureRandom RANDOM = new SecureRandom();
 
     private WorldPersistence() {}
@@ -43,7 +44,7 @@ public final class WorldPersistence {
         Properties props = load(worldDir);
         props.setProperty(PERSISTENT, Boolean.toString(persistent));
         if (persistent && props.getProperty(KEY) == null) {
-            props.setProperty(KEY, newKey());
+            newKey(props);
         }
         store(worldDir, props);
     }
@@ -51,14 +52,30 @@ public final class WorldPersistence {
     /** Gives the world a new key, and so a new address. */
     public static void resetKey(Path worldDir) throws IOException {
         Properties props = load(worldDir);
-        props.setProperty(KEY, newKey());
+        newKey(props);
         store(worldDir, props);
     }
 
-    private static String newKey() {
+    /**
+     * The relay holding the world's address: null for a key from before there were regions
+     * (it lives on the first relay), empty for a new key whose relay isn't chosen yet.
+     */
+    static String relay(Path worldDir) {
+        return read(worldDir).getProperty(RELAY);
+    }
+
+    static void setRelay(Path worldDir, String relay) throws IOException {
+        Properties props = load(worldDir);
+        props.setProperty(RELAY, relay);
+        store(worldDir, props);
+    }
+
+    // A new key is a new address, so it's placed on whichever relay is nearest when it's first used.
+    private static void newKey(Properties props) {
         byte[] bytes = new byte[32];
         RANDOM.nextBytes(bytes);
-        return Base64.getUrlEncoder().withoutPadding().encodeToString(bytes);
+        props.setProperty(KEY, Base64.getUrlEncoder().withoutPadding().encodeToString(bytes));
+        props.setProperty(RELAY, "");
     }
 
     /** For readers: an unreadable file counts as "not persistent". */

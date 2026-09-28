@@ -10,9 +10,9 @@ public class Config extends ReflectiveConfig {
     @Comment("Whether to hide the domain on chat and only allow copying")
     public final TrackedValue<Boolean> hideDomainInChat = this.value(false);
 
-    // The MCPersist relay: persistent worlds keep their address only on a relay that
-    // stores world keys, which e4mc's relays don't.
-    public final TrackedValue<String> relayHost = this.value("relay.mcpersist.com");
+    // Not relayHost, which older versions wrote to every config file as relay.mcpersist.com.
+    @Comment("The relay to host through, e.g. relay.eu.mcpersist.com; empty for the nearest one")
+    public final TrackedValue<String> relay = this.value("");
     public final TrackedValue<Integer> relayPort = this.value(25575);
 
     @Comment("Allows use of certain dedicated server commands such as /ban and /whitelist")

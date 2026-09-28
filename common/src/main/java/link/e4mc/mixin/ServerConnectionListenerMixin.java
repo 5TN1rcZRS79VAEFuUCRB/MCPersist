@@ -6,7 +6,6 @@ import link.e4mc.Config;
 import link.e4mc.E4mcClient;
 import link.e4mc.QuiclimeSession;
 import link.e4mc.SessionPlayers;
-import link.e4mc.WorldPersistence;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.network.ServerConnectionListener;
 import net.minecraft.world.level.storage.LevelResource;
@@ -49,8 +48,7 @@ public abstract class ServerConnectionListenerMixin {
         // On an integrated server this is the host opening the world to LAN.
         ((SessionPlayers) server).mcpersist$markShared();
         if (Config.INSTANCE.hostEnabled.value()) {
-            String worldKey = WorldPersistence.keyFor(server.getWorldPath(LevelResource.ROOT));
-            QuiclimeSession session = new QuiclimeSession(e4mc$childHandler, e4mc$group, worldKey);
+            QuiclimeSession session = new QuiclimeSession(e4mc$childHandler, e4mc$group, server.getWorldPath(LevelResource.ROOT));
             E4mcClient.session = session;
             e4mc$childHandler = null;
             e4mc$group = null;

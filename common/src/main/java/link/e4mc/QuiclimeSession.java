@@ -40,6 +40,7 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Path;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
@@ -158,7 +159,11 @@ public class QuiclimeSession {
     private QuicChannel quicChannel;
 
     private DialtoneServerChannel dialtoneChannel;
-    final String worldKey;
+    final Path worldDir;
+    /** The world's key if it's persistent, else null; read when the session starts. */
+    private String worldKey;
+    /** The relay this session hosts through, once chosen. */
+    public volatile String relayHost;
     /** The address the relay assigned, once assigned. */
     public volatile String domain;
     /** The relay's port for players' Simple Voice Chat traffic, if it carries it. */
@@ -166,11 +171,10 @@ public class QuiclimeSession {
     private volatile QuicStreamChannel controlChannel;
     private final CompletableFuture<Void> handedOff = new CompletableFuture<>();
 
-    /** {@code worldKey} is the world's key if it's persistent, else null. */
-    public QuiclimeSession(ChannelHandler handler, EventLoopGroup group, String worldKey) {
+    public QuiclimeSession(ChannelHandler handler, EventLoopGroup group, Path worldDir) {
         this.handler = handler;
         this.group = group;
-        this.worldKey = worldKey;
+        this.worldDir = worldDir;
     }
 
     public void startAsync() {
@@ -200,7 +204,8 @@ public class QuiclimeSession {
 
     public void start() {
         try {
-            String relayHost = Config.INSTANCE.relayHost.value();
+            String relayHost = this.relayHost = Relays.forWorld(worldDir, Config.INSTANCE.relay.value());
+            worldKey = WorldPersistence.keyFor(worldDir);
             int relayPort = Config.INSTANCE.relayPort.value();
             LOGGER.info("using relay {}:{}", relayHost, relayPort);
             InetAddress relay = InetAddress.getByName(relayHost);

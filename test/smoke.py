@@ -263,7 +263,7 @@ def start_relay(relay_bin, root):
     jvm_args = [f"-Djavax.net.ssl.trustStore={root / 'trust.p12'}", "-Djavax.net.ssl.trustStorePassword=changeit"]
     mod_config = (
         # An IP, not "localhost": NeoForge's launch prefers IPv6, which the relay doesn't listen on.
-        'relayHost = "127.0.0.1"\n'
+        'relay = "127.0.0.1"\n'
         f"relayPort = {quic_port}\n"
         "dialtoneHostEnabled = false\n"
     )

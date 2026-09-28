@@ -61,7 +61,8 @@ public class Doctor {
             result.append(stackTrace(e));
             result.append("\n");
         }
-        result.append(String.format("relay is %s:%d.\n", Config.INSTANCE.relayHost.value(), Config.INSTANCE.relayPort.value()));
+        String relay = session != null && session.relayHost != null ? session.relayHost : "not chosen yet";
+        result.append(String.format("relay is %s:%d.\n", relay, Config.INSTANCE.relayPort.value()));
         return result.toString();
     }
 
