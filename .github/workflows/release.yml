@@ -75,14 +75,14 @@ jobs:
           client=$(version_id Client)
           for loader in fabric neoforge forge; do
             case "$loader" in fabric) name=Fabric ;; neoforge) name=NeoForge ;; forge) name=Forge ;; esac
-            relations='{"projects": []}'
-            [ "$loader" = fabric ] && relations='{"projects": [{"slug": "fabric-api", "type": "requiredDependency"}]}'
+            # Only Fabric's needs another mod; CurseForge refuses an empty list of relations.
             jq -n --arg version "$VERSION" --arg type "$type" --arg loader "$loader" \
-                --argjson mc "$mc" --argjson client "$client" --argjson loaderId "$(version_id "$name")" --argjson relations "$relations" '{
+                --argjson mc "$mc" --argjson client "$client" --argjson loaderId "$(version_id "$name")" '{
               displayName: "MCPersist \($version) (\($loader))", releaseType: $type,
               changelog: "https://github.com/5TN1rcZRS79VAEFuUCRB/MCPersist/releases/tag/v\($version)",
-              changelogType: "markdown", gameVersions: [$mc, $loaderId, $client], relations: $relations
-            }' > metadata.json
+              changelogType: "markdown", gameVersions: [$mc, $loaderId, $client]
+            } + if $loader == "fabric"
+                then {relations: {projects: [{slug: "fabric-api", type: "requiredDependency"}]}} else {} end' > metadata.json
             curl --fail-with-body -sS "$api/projects/$PROJECT/upload-file" -H "X-Api-Token: $CURSEFORGE_TOKEN" \
               -F "metadata=<metadata.json;type=application/json" -F "file=@$loader/build/libs/mcpersist-$loader-$VERSION.jar"
           done
