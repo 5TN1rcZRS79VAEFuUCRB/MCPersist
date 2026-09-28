@@ -19,6 +19,14 @@ as a headless server in the background on your machine, and it keeps the same ad
 > [e4mc](https://github.com/vgskye/e4mc-minecraft-architectury), which this is forked from and which doesn't
 > accept AI contributions, is a good choice when you don't need the world to keep running.
 
+<p align="center">
+  <a href="https://www.youtube.com/watch?v=hEOFd0jpw-4">
+    <img src="https://img.youtube.com/vi/hEOFd0jpw-4/maxresdefault.jpg" alt="Watch the MCPersist walkthrough on YouTube" width="640">
+  </a>
+  <br>
+  <i>Five-minute walkthrough: install, share your world, leave, and your friends keep playing.</i>
+</p>
+
 ## Joining a world
 
 Shared worlds use a whitelist. Before a friend joins for the first time, the host runs
