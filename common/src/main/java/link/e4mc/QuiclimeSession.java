@@ -341,7 +341,7 @@ public class QuiclimeSession {
                                                             .withColor(ChatFormatting.GREEN)
                                                             .withHoverEvent(new HoverEvent.ShowText(Component.translatable("chat.copy.click")))))
                                                     .append(Component.translatable("text.e4mc_minecraft.clickToStop").withStyle(it -> it
-                                                            .withClickEvent(new ClickEvent.RunCommand("/e4mc stop"))
+                                                            .withClickEvent(new ClickEvent.RunCommand("/mcpersist stop"))
                                                             .withColor(ChatFormatting.GRAY)));
                                             addMessage(message);
                                             // Whitelisting is only applied when the dedicated commands are.

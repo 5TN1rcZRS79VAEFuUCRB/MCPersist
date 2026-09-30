@@ -3,5 +3,5 @@
     "text.e4mc_minecraft.closeServer": "Se ha dejado de compartir públicamente tu partida",
     "text.e4mc_minecraft.serverAlreadyClosed": "Tu partida no está siendo compartida",
     "text.e4mc_minecraft.clickToStop": " (Click para detener)",
-    "text.e4mc_minecraft.error": "Ha ocurrido un error con e4mc"
+    "text.e4mc_minecraft.error": "Ha ocurrido un error con MCPersist"
 }

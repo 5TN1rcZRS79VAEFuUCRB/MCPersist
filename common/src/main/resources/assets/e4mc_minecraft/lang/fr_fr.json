@@ -3,5 +3,5 @@
     "text.e4mc_minecraft.closeServer": "Le jeu local n'est plus hébergé publiquement",
     "text.e4mc_minecraft.serverAlreadyClosed": "Le jeu local n'est pas hébergé publiquement",
     "text.e4mc_minecraft.clickToStop": " (Cliquez ici pour arrêter)",
-    "text.e4mc_minecraft.error": "Une erreur s'est produite dans e4mc"
+    "text.e4mc_minecraft.error": "Une erreur s'est produite dans MCPersist"
 }

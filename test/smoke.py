@@ -209,12 +209,12 @@ def test_commands(cache):
         if not any("Loaded 1 plugin" in line for line in server.log):
             fail("Simple Voice Chat didn't load MCPersist's plugin", server)
         # Listing commands evaluates every command's permission check, including
-        # /e4mc's; before the fix this crashed the tick loop on 1.21.11+ (e4mc#228).
+        # /mcpersist's; before the fix this crashed the tick loop on 1.21.11+ (e4mc#228).
         server.command("help")
-        server.wait_for("/e4mc", timeout=30)
+        server.wait_for("/mcpersist", timeout=30)
         if "using relay" in server.stop_cleanly():
             fail("mod contacted the relay despite hostEnabled = false")
-    print("PASS: server ran the mod with Simple Voice Chat, listed /e4mc for the console, and stopped cleanly")
+    print("PASS: server ran the mod with Simple Voice Chat, listed /mcpersist for the console, and stopped cleanly")
 
 
 BASE_DOMAIN = "relay.test"

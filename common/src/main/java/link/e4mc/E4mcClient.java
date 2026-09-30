@@ -42,7 +42,7 @@ public class E4mcClient {
             WhitelistCommand.register(dispatcher);
         }
         dispatcher.register(
-                Commands.literal("e4mc")
+                Commands.literal("mcpersist")
                         .requires(src -> {
                             if (src.getServer() == null) {
                                 return false;
@@ -68,10 +68,10 @@ public class E4mcClient {
                         }))
                         .then(Commands.literal("doctor").executes(ctx -> {
                             var thread = new Thread(() -> {
-                                LOGGER.info("generating e4mc doctor report");
+                                LOGGER.info("generating MCPersist doctor report");
                                 ctx.getSource().sendSuccess(() -> Component.translatable("text.e4mc_minecraft.doctor.start"), true);
                                 var diag = Doctor.doctor();
-                                LOGGER.info("e4mc doctor report:\n{}", diag);
+                                LOGGER.info("MCPersist doctor report:\n{}", diag);
                                 ctx.getSource().sendSuccess(() -> Component.literal(diag), true);
                             }, "e4mc_minecraft-doctor");
                             thread.setDaemon(true);
