@@ -3,6 +3,7 @@ package link.e4mc.mixin;
 import link.e4mc.Config;
 import link.e4mc.E4mcClient;
 import link.e4mc.SessionPlayers;
+import link.e4mc.WorldPersistence;
 import net.minecraft.network.Connection;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.MinecraftServer;
@@ -12,8 +13,10 @@ import net.minecraft.server.players.NameAndId;
 import net.minecraft.server.players.PlayerList;
 import net.minecraft.server.players.UserBanList;
 import net.minecraft.server.players.UserWhiteList;
+import net.minecraft.world.level.storage.LevelResource;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Shadow;
+import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
@@ -24,6 +27,9 @@ import java.net.SocketAddress;
 
 @Mixin(PlayerList.class)
 public abstract class PlayerListMixin {
+    @Unique
+    private static boolean mcpersist$hinted;
+
     @Shadow public abstract UserBanList getBans();
 
     @Shadow public abstract UserWhiteList getWhiteList();
@@ -51,6 +57,15 @@ public abstract class PlayerListMixin {
     @Inject(method = "placeNewPlayer", at = @At("TAIL"))
     void mcpersist$recordJoin(Connection connection, ServerPlayer player, CommonListenerCookie cookie, CallbackInfo ci) {
         ((SessionPlayers) getServer()).mcpersist$sessionPlayers().add(player.nameAndId());
+        // Sharing hides in World Options, so tell the host where it is: once a launch, in a world
+        // that isn't shared yet.
+        MinecraftServer server = getServer();
+        if (!mcpersist$hinted && Config.INSTANCE.hostEnabled.value() && !server.isDedicatedServer()
+                && server.isSingleplayerOwner(player.nameAndId()) && !server.isPublished()
+                && !WorldPersistence.isPersistent(server.getWorldPath(LevelResource.ROOT))) {
+            mcpersist$hinted = true;
+            player.sendSystemMessage(Component.translatable("text.mcpersist.howToShare"));
+        }
     }
 
     @Inject(method = "canPlayerLogin", at = @At("HEAD"), cancellable = true)
