@@ -83,6 +83,20 @@ public abstract class MinecraftServerMixin implements SessionPlayers {
         }
     }
 
+    @Override
+    public void mcpersist$markUnshared() {
+        if (!mcpersist$shared) {
+            return;
+        }
+        mcpersist$shared = false;
+        Path worldDir = getWorldPath(LevelResource.ROOT).toAbsolutePath().normalize();
+        try {
+            Handoff.clearSessionOpen(LocalHandoff.serversDir(), worldDir);
+        } catch (IOException e) {
+            E4mcClient.LOGGER.error("Failed to mark {} closed", worldDir, e);
+        }
+    }
+
     @Inject(method = "onServerCrash", at = @At("HEAD"))
     private void mcpersist$noteCrash(CrashReport report, CallbackInfo ci) {
         mcpersist$crashed = true;

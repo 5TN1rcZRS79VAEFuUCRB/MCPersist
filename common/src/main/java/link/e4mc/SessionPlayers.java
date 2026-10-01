@@ -10,4 +10,7 @@ public interface SessionPlayers {
 
     /** The world was opened to LAN this session; only then is it handed off on leaving. */
     void mcpersist$markShared();
+
+    /** The host stopped sharing (/mcpersist stop): leaving just closes the world. */
+    void mcpersist$markUnshared();
 }

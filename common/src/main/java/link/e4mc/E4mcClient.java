@@ -89,6 +89,7 @@ public class E4mcClient {
                         .then(Commands.literal("stop").executes(ctx -> {
                             if ((session != null) && (session.state != QuiclimeSession.State.STOPPED)) {
                                 session.stop();
+                                ((SessionPlayers) ctx.getSource().getServer()).mcpersist$markUnshared();
                                 ctx.getSource().sendSuccess(() -> Component.translatable("text.e4mc_minecraft.closeServer"), true);
                             } else {
                                 ctx.getSource().sendFailure(Component.translatable("text.e4mc_minecraft.serverAlreadyClosed"));
