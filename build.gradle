@@ -1,1 +1,40 @@
 // The mod is built by the fabric project; see fabric/build.gradle.
+
+// The QUIC (relay) and iroh-java (peer-to-peer) native libraries go in each jar, so nothing is
+// downloaded when the game runs. These are the builds those libraries expect, checked against the
+// hashes they carry; when either library is updated, update its files here and its suffix in
+// E4mcClient.
+def natives = [
+    'netty_quiche_windows_x86_64_74.dll'     : 'cca45c8f4c08525a4edf032b1c77dad9fa03ab99276f9df02a7a13126b600804',
+    'libnetty_quiche_linux_x86_64_74.so'     : '96139aaf56d7193be493fbedec55013a215b7a5fd551cf2a624ff2440406f702',
+    'libnetty_quiche_linux_aarch_64_74.so'   : '07a5dbd61979785b6466ffa77c44b0e24523c884fc0a72ea61ea591458ae3ec0',
+    'libnetty_quiche_osx_x86_64_74.dylib'    : '721cda544e76686f0ff82a184b84053d153cd5104f512168943545d1d243a53f',
+    'libnetty_quiche_osx_aarch_64_74.dylib'  : 'f52c90792b06683a3d0b481de738f34e39765f7887250d7a4e273ba44bacb37c',
+    'iroh_java_windows_x86_64_57caf9a.dll'   : '534286d02cdc1596ea6064d4193293228baef694d088dc7ddf931a3bdd9106eb',
+    'iroh_java_windows_aarch_64_57caf9a.dll' : '8056741ecfe862fcc33996b5f7854902877b13a8eade1d8d89d321cba2642dcb',
+    'libiroh_java_linux_x86_64_57caf9a.so'   : '5aa9ed03742af6d37a0797c44efb19ca7c487fc3e6ccd76956b3a58eed9f6246',
+    'libiroh_java_linux_aarch_64_57caf9a.so' : '8c45a9e74ca83fddd2e93701818a5043a90f5e0acdd36cd5d8abeb508895ef20',
+    'libiroh_java_osx_x86_64_57caf9a.dylib'  : '652331ade05abf7f8d71689817f53a06816d8f764242f4567fdf80249e6e32f5',
+    'libiroh_java_osx_aarch_64_57caf9a.dylib': '53389f821ecf57a7924dc23df4cdb8a56ba8bb0a8dd466d68d1b9c72fd5e4c80',
+]
+
+// Each loader project adds this task's output to its resources.
+tasks.register('fetchNatives') {
+    def dir = layout.buildDirectory.dir('natives')
+    inputs.property 'natives', natives
+    outputs.dir dir
+    doLast {
+        natives.each { name, sha256 ->
+            File file = dir.get().file("mcpersist-natives/$name").asFile
+            if (file.isFile() && file.bytes.digest('SHA-256') == sha256) {
+                return
+            }
+            file.parentFile.mkdirs()
+            file.bytes = new URL("https://natives.e4mc.link/$name").bytes
+            if (file.bytes.digest('SHA-256') != sha256) {
+                file.delete()
+                throw new GradleException("$name from natives.e4mc.link doesn't match its pinned SHA-256")
+            }
+        }
+    }
+}

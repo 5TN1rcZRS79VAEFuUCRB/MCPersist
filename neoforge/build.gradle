@@ -18,6 +18,7 @@ repositories {
 sourceSets.main {
     java.srcDir '../common/src/main/java'
     resources.srcDir '../common/src/main/resources'
+    resources.srcDir rootProject.tasks.named('fetchNatives')
 }
 
 java.toolchain.languageVersion = JavaLanguageVersion.of(25)

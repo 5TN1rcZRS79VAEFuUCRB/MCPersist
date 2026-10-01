@@ -11,6 +11,12 @@ import net.minecraft.server.permissions.Permissions;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.io.IOException;
+import java.io.InputStream;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
+
 public class E4mcClient {
     public static final String MOD_ID = "mcpersist";
     public static QuiclimeSession session;
@@ -18,19 +24,42 @@ public class E4mcClient {
 
     public static void init() {
         Config.INSTANCE.id(); // Loads the config, writing the file if it's missing
-        // QUIC (for the relay) and iroh-java (for peer-to-peer) download their native libraries
-        // on first use, from e4mc's CDN unless told otherwise; ours mirrors them. Each checks the
-        // file's SHA-256 either way. The suffixes are their native builds: when either library
-        // is updated, update its suffix here and the files on the mirror.
-        mirrorNative("link.e4mc.native_url", "netty_quiche", "74");
-        mirrorNative("link.e4mc.dialtone.native_url", "iroh_java", "57caf9a");
+        // QUIC (for the relay) and iroh-java (for peer-to-peer) load the native library named by
+        // their native_path property instead of downloading one, so the jar carries them (see
+        // build.gradle). The suffixes are their native builds: when either library is updated,
+        // update its suffix here and its files in build.gradle.
+        bundledNative("link.e4mc.native_path", "netty_quiche", "74");
+        bundledNative("link.e4mc.dialtone.native_path", "iroh_java", "57caf9a");
     }
 
-    private static void mirrorNative(String urlProperty, String library, String build) {
-        if (System.getProperty(urlProperty) == null) {
-            String file = System.mapLibraryName(library + "_" + PlatformDependent.normalizedOs() + "_"
-                    + PlatformDependent.normalizedArch() + "_" + build);
-            System.setProperty(urlProperty, "https://mcpersist.com/natives/" + file);
+    /**
+     * Unpacks this platform's build of the library into the game folder and points the library at
+     * it. The path is set even when the jar has no build for this platform, so the library fails
+     * to load rather than downloading one.
+     */
+    private static void bundledNative(String pathProperty, String library, String build) {
+        if (System.getProperty(pathProperty) != null) {
+            return;
+        }
+        String file = System.mapLibraryName(library + "_" + PlatformDependent.normalizedOs() + "_"
+                + PlatformDependent.normalizedArch() + "_" + build);
+        Path dest = Agnos.gameDir().resolve("mcpersist").resolve("natives").resolve(file);
+        System.setProperty(pathProperty, dest.toString());
+        if (Files.exists(dest)) {
+            return;
+        }
+        try (InputStream in = E4mcClient.class.getResourceAsStream("/mcpersist-natives/" + file)) {
+            if (in == null) {
+                LOGGER.error("MCPersist has no {} for this platform", file);
+                return;
+            }
+            Files.createDirectories(dest.getParent());
+            // Copied whole, then moved into place, so a half-written file is never loaded.
+            Path temp = Files.createTempFile(dest.getParent(), file, ".tmp");
+            Files.copy(in, temp, StandardCopyOption.REPLACE_EXISTING);
+            Files.move(temp, dest, StandardCopyOption.ATOMIC_MOVE);
+        } catch (IOException e) {
+            LOGGER.error("couldn't unpack {}", file, e);
         }
     }
 
