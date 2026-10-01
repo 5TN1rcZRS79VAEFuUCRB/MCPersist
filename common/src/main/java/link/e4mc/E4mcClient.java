@@ -113,6 +113,7 @@ public class E4mcClient {
                                 session.stop();
                                 session = new QuiclimeSession(session.handler, session.group, session.worldDir);
                                 session.startAsync();
+                                ((SessionPlayers) ctx.getSource().getServer()).mcpersist$markShared();
                             }
                             return 1;
                         }))
