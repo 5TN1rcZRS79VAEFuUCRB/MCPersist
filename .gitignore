@@ -16,5 +16,5 @@ classes/
 .metadata
 .vscode
 .settings
-*.launch__pycache__/
+*.launch
 __pycache__/

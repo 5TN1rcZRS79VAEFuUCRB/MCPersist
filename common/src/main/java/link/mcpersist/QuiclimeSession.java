@@ -216,13 +216,15 @@ public class QuiclimeSession {
             if (!(group instanceof MultiThreadIoEventLoopGroup mig)) {
                 throw new RuntimeException("Unknown EventLoopGroup " + group.getClass().getName());
             }
-            Class<? extends DatagramChannel> channelClass = null;
+            Class<? extends DatagramChannel> channelClass;
             if (mig.isIoType(EpollIoHandler.class)) {
                 channelClass = EpollDatagramChannel.class;
             } else if (mig.isIoType(NioIoHandler.class)) {
                 channelClass = NioDatagramChannel.class;
             } else if (mig.isIoType(KQueueIoHandler.class)) {
                 channelClass = KQueueDatagramChannel.class;
+            } else {
+                throw new RuntimeException("Unknown EventLoopGroup transport " + group.getClass().getName());
             }
             new Bootstrap()
                     .group(group)
