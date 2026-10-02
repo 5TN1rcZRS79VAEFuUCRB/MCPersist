@@ -19,7 +19,7 @@ import java.nio.file.StandardCopyOption;
 
 public class MCPersist {
     public static final String MOD_ID = "mcpersist";
-    public static QuiclimeSession session;
+    public static volatile QuiclimeSession session;
     public static final Logger LOGGER = LoggerFactory.getLogger(MCPersist.MOD_ID);
 
     public static void init() {
@@ -87,7 +87,7 @@ public class MCPersist {
                             }
                         })
                         .then(Commands.literal("stop").executes(ctx -> {
-                            if ((session != null) && (session.state != QuiclimeSession.State.STOPPED)) {
+                            if ((session != null) && !session.stopRequested()) {
                                 session.stop();
                                 ((SessionPlayers) ctx.getSource().getServer()).mcpersist$markUnshared();
                                 ctx.getSource().sendSuccess(() -> Component.translatable("text.mcpersist.closeServer"), true);

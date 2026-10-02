@@ -261,6 +261,7 @@ def start_relay(relay_bin, root):
         RUST_LOG="info",
     )
     relay = subprocess.Popen([relay_bin], env=env)
+    relay.env = env  # To start it again on the same ports and names.
     jvm_args = [f"-Djavax.net.ssl.trustStore={root / 'trust.p12'}", "-Djavax.net.ssl.trustStorePassword=changeit"]
     mod_config = (
         # An IP, not "localhost": NeoForge's launch prefers IPv6, which the relay doesn't listen on.
@@ -307,6 +308,39 @@ def test_stable_address(cache, relay_bin):
         finally:
             relay.kill()
     print(f"PASS: persistent world kept {first} across restarts; with persistence off it got {third}")
+
+
+def test_relay_restart(cache, relay_bin):
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        relay, jvm_args, mod_config, _, _ = start_relay(relay_bin, root)
+        env = relay.env
+        server = None
+        try:
+            server_root = root / "server"
+            server_root.mkdir()
+            prepare_server(server_root, cache, mod_config)
+            settings = server_root / "world" / "mcpersist.properties"
+            settings.parent.mkdir()
+            settings.write_text("persistent=true\nkey=smoke-test-restart-key-0123456789\n")
+            server = Server(server_root, jvm_args)
+            first = server.wait_for("Domain assigned: ", timeout=300).split("Domain assigned: ", 1)[1].strip()
+            if not any("Done (" in logged for logged in server.log):
+                server.wait_for("Done (", timeout=300)
+            # Killed, so the host only notices when the connection times out, as after a crash.
+            relay.kill()
+            relay.wait()
+            server.wait_for("reconnecting in", timeout=60)
+            relay = subprocess.Popen([relay_bin], env=env)
+            second = server.wait_for("Domain assigned: ", timeout=120).split("Domain assigned: ", 1)[1].strip()
+            if second != first:
+                fail(f"world came back at {second!r}, not {first!r}", server)
+            server.stop_cleanly()
+        finally:
+            relay.kill()
+            if server and server.process.poll() is None:
+                server.process.kill()
+    print(f"PASS: after the relay restarted, the world reconnected on its own at {first}")
 
 
 def varint(n):
@@ -666,6 +700,7 @@ def main():
         if relay_bin:
             test_stable_address(cache, relay_bin)
             test_relayed_leave(cache, relay_bin)
+            test_relay_restart(cache, relay_bin)
         else:
             print("SKIP: stable-address check (set MCPERSIST_RELAY to an mcpersist-relay binary)")
         test_handoff(cache, relay_bin)

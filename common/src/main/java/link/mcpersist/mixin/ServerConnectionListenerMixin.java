@@ -83,7 +83,8 @@ public abstract class ServerConnectionListenerMixin {
     @Inject(method = "stop", at = @At(value = "HEAD"))
     private void interceptStop(CallbackInfo ci) {
         QuiclimeSession session = MCPersist.session;
-        if ((session != null) && (session.state != QuiclimeSession.State.STOPPED)) {
+        // Also when it's between reconnect attempts, so none follows.
+        if (session != null) {
             session.stop();
             MCPersist.session = null;
         }

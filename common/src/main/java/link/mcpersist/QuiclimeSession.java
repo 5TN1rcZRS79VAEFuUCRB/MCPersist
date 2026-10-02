@@ -44,8 +44,10 @@ import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 public class QuiclimeSession {
     private static final Gson gson = new Gson();
@@ -159,10 +161,24 @@ public class QuiclimeSession {
     private volatile QuicStreamChannel controlChannel;
     private final CompletableFuture<Void> handedOff = new CompletableFuture<>();
 
+    /** Seconds before each reconnect attempt; the last repeats until one gets through. */
+    private static final int[] RECONNECT_DELAYS = {5, 10, 30, 60};
+    /** Reconnect attempts since the world last had its address; 0 for a session the host started. */
+    private final int attempt;
+    /** stop() was called: the host or the server ended this session, so it isn't retried. */
+    private volatile boolean stopRequested;
+    private final AtomicBoolean ended = new AtomicBoolean();
+    private volatile boolean assigned;
+
     public QuiclimeSession(ChannelHandler handler, EventLoopGroup group, Path worldDir) {
+        this(handler, group, worldDir, 0);
+    }
+
+    private QuiclimeSession(ChannelHandler handler, EventLoopGroup group, Path worldDir, int attempt) {
         this.handler = handler;
         this.group = group;
         this.worldDir = worldDir;
+        this.attempt = attempt;
     }
 
     public void startAsync() {
@@ -271,6 +287,7 @@ public class QuiclimeSession {
                             public void channelInactive(ChannelHandlerContext ctx) throws Exception {
                                 super.channelInactive(ctx);
                                 state = State.STOPPED;
+                                reconnect();
                             }
 
                             // QUIC datagrams: voice from players who joined through the relay.
@@ -306,7 +323,7 @@ public class QuiclimeSession {
                                         handedOff.complete(null);
                                     } else if (msg instanceof ControlMessageCodec.DomainAssignmentFailedMessageClientbound failed) {
                                         MCPersist.LOGGER.error("Relay refused this world's address: {}", failed.reason);
-                                        if (Agnos.isClient()) {
+                                        if (Agnos.isClient() && attempt == 0) {
                                             addMessage(Component.translatable("name_in_use".equals(failed.reason)
                                                     ? "text.mcpersist.addressInUse"
                                                     : "text.mcpersist.addressRefused"));
@@ -314,6 +331,7 @@ public class QuiclimeSession {
                                         state = State.UNHEALTHY;
                                     } else if (msg instanceof ControlMessageCodec.DomainAssignmentCompleteMessageClientbound complete) {
                                         state = State.STARTED;
+                                        assigned = true;
                                         String domain = complete.domain;
                                         QuiclimeSession.this.domain = domain;
                                         MCPersist.LOGGER.info("Domain assigned: {}", domain);
@@ -330,7 +348,7 @@ public class QuiclimeSession {
                                                             .withClickEvent(new ClickEvent.RunCommand("/mcpersist stop"))
                                                             .withColor(ChatFormatting.GRAY)));
                                             addMessage(message);
-                                            if (LocalHandoff.usesWhitelist()) {
+                                            if (LocalHandoff.usesWhitelist() && attempt == 0) {
                                                 addMessage(Component.translatable("text.mcpersist.whitelistOn",
                                                         Component.literal("/whitelist add <name>").withStyle(it -> it
                                                                 .withClickEvent(new ClickEvent.SuggestCommand("/whitelist add "))
@@ -407,9 +425,38 @@ public class QuiclimeSession {
         QuiclimeSession.this.state = State.UNHEALTHY;
         failureCause = e;
         MCPersist.LOGGER.error("error in MCPersist", e);
-        if (Agnos.isClient()) {
+        if (Agnos.isClient() && attempt == 0) {
             addMessage(Component.translatable("text.mcpersist.error"));
         }
+        reconnect();
+    }
+
+    /**
+     * The relay connection ended, or never started, without stop(): a new session tries again
+     * after a while. A persistent world's key gets its address back.
+     */
+    private void reconnect() {
+        if (stopRequested || !ended.compareAndSet(false, true)) {
+            return;
+        }
+        close();
+        int retry = assigned ? 1 : attempt + 1;
+        int delay = RECONNECT_DELAYS[Math.min(retry, RECONNECT_DELAYS.length) - 1];
+        MCPersist.LOGGER.info("Lost the relay connection; reconnecting in {} s", delay);
+        try {
+            group.schedule(() -> {
+                if (MCPersist.session == this) {
+                    MCPersist.session = new QuiclimeSession(handler, group, worldDir, retry);
+                    MCPersist.session.startAsync();
+                }
+            }, delay, TimeUnit.SECONDS);
+        } catch (RejectedExecutionException shuttingDown) {
+            // The server is stopping.
+        }
+    }
+
+    public boolean stopRequested() {
+        return stopRequested;
     }
 
     private static void afterCloseIfPresent(Channel channel, Runnable callback) {
@@ -458,6 +505,11 @@ public class QuiclimeSession {
     }
 
     public void stop() {
+        stopRequested = true;
+        close();
+    }
+
+    private void close() {
         state = State.STOPPING;
         afterCloseIfPresent(dialtoneChannel, () -> afterCloseIfPresent(quicChannel, () -> afterCloseIfPresent(datagramChannel, () -> state = State.STOPPED)));
     }
