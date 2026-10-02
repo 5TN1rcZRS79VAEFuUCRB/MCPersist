@@ -1,0 +1,7 @@
+{
+    "text.mcpersist.domainAssigned": "Permainan tempatan dianjurkan pada domain [%s]",
+    "text.mcpersist.closeServer": "Permainan tempatan tidak lagi dianjurkan secara terbuka",
+    "text.mcpersist.serverAlreadyClosed": "Permainan tempatan tidak dianjurkan secara terbuka",
+    "text.mcpersist.clickToStop": " (Klik di sini untuk berhenti)",
+    "text.mcpersist.error": "Sebuah ralat telah berlaku dalam MCPersist"
+}

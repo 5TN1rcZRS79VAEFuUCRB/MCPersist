@@ -1,0 +1,31 @@
+{
+  "required": true,
+  "package": "link.mcpersist.mixin",
+  "compatibilityLevel": "JAVA_17",
+  "minVersion": "0.8",
+  "mixins": [
+    "ConnectionMixin",
+    "MinecraftServerMixin",
+    "OwnerCommandsMixin",
+    "ServerConnectionListenerMixin",
+    "ServerLoginPacketListenerImplMixin",
+    "ServerboundKeyPacketMixin"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  },
+  "client": [
+    "ClientHandshakePacketListenerImplMixin",
+    "EditWorldScreenMixin",
+    "IntegratedServerMixin",
+    "LevelSummaryMixin",
+    "MinecraftMixin",
+    "PlayerListMixin",
+    "SelectWorldScreenMixin",
+    "ServerAddressMixin",
+    "ServerNameResolverMixin",
+    "TitleScreenMixin",
+    "WorldListEntryMixin",
+    "WorldOptionsScreenMixin"
+  ]
+}

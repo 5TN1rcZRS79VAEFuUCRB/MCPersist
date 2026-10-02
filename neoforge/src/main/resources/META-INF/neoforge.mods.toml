@@ -15,7 +15,7 @@ e4mc, but your world keeps running after you leave. Based on e4mc by skyevg.
 '''
 
 [[mixins]]
-config = "e4mc.mixins.json"
+config = "mcpersist.mixins.json"
 
 [[dependencies.mcpersist]]
 modId = "minecraft"

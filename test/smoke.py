@@ -416,7 +416,7 @@ atexit.register(shutil.rmtree, HOME, ignore_errors=True)
 
 def handoff_jvm(cache):
     classpath = os.pathsep.join([str(cache / "mod.jar"), str(cache / "gson.jar")])
-    return [os.environ.get("JAVA", "java"), f"-Duser.home={HOME}", "-cp", classpath, "link.e4mc.handoff.Handoff"]
+    return [os.environ.get("JAVA", "java"), f"-Duser.home={HOME}", "-cp", classpath, "link.mcpersist.handoff.Handoff"]
 
 
 def handoff_env():
@@ -599,14 +599,14 @@ def check_autostart(cache, world, servers, server_dir, console):
     if len(entries) != expected:
         fail(f"expected {expected} autostart file(s), found {entries}")
     text = entries[0].read_text()
-    if "link.e4mc.handoff.Launcher" not in text or str(server_dir.absolute()) not in text:
+    if "link.mcpersist.handoff.Launcher" not in text or str(server_dir.absolute()) not in text:
         fail(f"autostart entry doesn't run the launcher for {server_dir}: {text}")
 
     # What the entry runs at login.
     console.unlink()
     boot = subprocess.Popen(
         [os.environ.get("JAVA", "java"), "-cp", str(server_dir / "mcpersist-launcher.jar"),
-         "link.e4mc.handoff.Launcher", str(server_dir.absolute())])
+         "link.mcpersist.handoff.Launcher", str(server_dir.absolute())])
     try:
         wait_in_file(console, "Done (", timeout=300)
         if handoff_action(cache, world, servers, "status") != "running":

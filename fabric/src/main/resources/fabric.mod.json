@@ -19,14 +19,14 @@
   "environment": "*",
   "entrypoints": {
     "main": [
-      "link.e4mc.fabric.E4mcClientFabric"
+      "link.mcpersist.fabric.MCPersistFabric"
     ],
     "voicechat": [
-      "link.e4mc.voice.VoicePlugin"
+      "link.mcpersist.voice.VoicePlugin"
     ]
   },
   "mixins": [
-    "e4mc.mixins.json"
+    "mcpersist.mixins.json"
   ],
   "depends": {
     "fabric-api": "*",

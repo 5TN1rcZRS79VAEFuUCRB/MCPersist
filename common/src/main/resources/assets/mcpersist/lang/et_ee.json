@@ -1,0 +1,6 @@
+{
+    "text.mcpersist.domainAssigned": "Kohalik mäng on üles seatud domeenil [%s]",
+    "text.mcpersist.closeServer": "Kohalik mäng ei ole enam avalikult hostitud",
+    "text.mcpersist.serverAlreadyClosed": "Kohalik mäng ei ole avalikult hostitud",
+    "text.mcpersist.clickToStop": " (Klõpsa lõpetamiseks)"
+}

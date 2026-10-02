@@ -1,0 +1,7 @@
+{
+    "text.mcpersist.domainAssigned": "Локальна гра розміщена на домені [%s]",
+    "text.mcpersist.closeServer": "Локальна гра більше не є загальнодоступною",
+    "text.mcpersist.serverAlreadyClosed": "Локальна гра не є загальнодоступною",
+    "text.mcpersist.clickToStop": " (Натисніть тут, щоб зупинити)",
+    "text.mcpersist.error": "Виникла помилка в MCPersist"
+}

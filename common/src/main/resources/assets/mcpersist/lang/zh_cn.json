@@ -1,0 +1,6 @@
+{
+    "text.mcpersist.domainAssigned": "将本地游戏托管在域名[%s]上",
+    "text.mcpersist.closeServer": "不再公开托管本地游戏",
+    "text.mcpersist.serverAlreadyClosed": "本地游戏没有被公开托管",
+    "text.mcpersist.clickToStop": "（点击这里以停止）"
+}

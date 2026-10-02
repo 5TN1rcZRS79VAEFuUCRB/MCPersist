@@ -1,0 +1,6 @@
+{
+    "text.mcpersist.domainAssigned": "Τοπικό παιχνίδι εξυπηρετήται στη διεύθηνση [%s]",
+    "text.mcpersist.closeServer": "Το τοπικό παιχνίδι δεν εξυπηρετήται δημόσια πλέον",
+    "text.mcpersist.serverAlreadyClosed": "Το τοπικό παιχνίδι δεν εξυπηρετήται δημόσια",
+    "text.mcpersist.clickToStop": " (Πατήστε εδώ για απενεργοποίηση)"
+}

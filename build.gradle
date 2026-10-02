@@ -3,7 +3,7 @@
 // The QUIC (relay) and iroh-java (peer-to-peer) native libraries go in each jar, so nothing is
 // downloaded when the game runs. These are the builds those libraries expect, checked against the
 // hashes they carry; when either library is updated, update its files here and its suffix in
-// E4mcClient.
+// MCPersist.
 def natives = [
     'netty_quiche_windows_x86_64_74.dll'     : 'cca45c8f4c08525a4edf032b1c77dad9fa03ab99276f9df02a7a13126b600804',
     'libnetty_quiche_linux_x86_64_74.so'     : '96139aaf56d7193be493fbedec55013a215b7a5fd551cf2a624ff2440406f702',

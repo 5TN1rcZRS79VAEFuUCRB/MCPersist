@@ -1,0 +1,7 @@
+{
+    "text.mcpersist.domainAssigned": "本地遊戲已託管在網域 [%s]",
+    "text.mcpersist.closeServer": "本地遊戲不再公開託管",
+    "text.mcpersist.serverAlreadyClosed": "本地遊戲未公開託管",
+    "text.mcpersist.clickToStop": "（點擊此處停止）",
+    "text.mcpersist.error": "在 MCPersist 中發生了個錯誤"
+}

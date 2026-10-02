@@ -1,0 +1,7 @@
+{
+    "text.mcpersist.domainAssigned": "Partida ahora disponible públicamente en [%s]",
+    "text.mcpersist.closeServer": "Se ha dejado de compartir públicamente tu partida",
+    "text.mcpersist.serverAlreadyClosed": "Tu partida no está siendo compartida",
+    "text.mcpersist.clickToStop": " (Click para detener)",
+    "text.mcpersist.error": "Ha ocurrido un error con MCPersist"
+}

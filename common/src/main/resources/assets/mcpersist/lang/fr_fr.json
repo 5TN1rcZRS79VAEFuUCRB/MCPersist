@@ -1,0 +1,7 @@
+{
+    "text.mcpersist.domainAssigned": "Jeu local hébergé sur le domaine [%s]",
+    "text.mcpersist.closeServer": "Le jeu local n'est plus hébergé publiquement",
+    "text.mcpersist.serverAlreadyClosed": "Le jeu local n'est pas hébergé publiquement",
+    "text.mcpersist.clickToStop": " (Cliquez ici pour arrêter)",
+    "text.mcpersist.error": "Une erreur s'est produite dans MCPersist"
+}
