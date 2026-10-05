@@ -1,6 +1,6 @@
 modLoader = "javafml"
 loaderVersion = "[66,)"
-license = "MIT"
+license = "GPL-3.0-or-later"
 
 [[mods]]
 modId = "mcpersist"

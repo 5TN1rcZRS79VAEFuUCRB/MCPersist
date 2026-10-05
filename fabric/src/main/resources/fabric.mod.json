@@ -14,7 +14,7 @@
     "homepage": "https://github.com/5TN1rcZRS79VAEFuUCRB/MCPersist",
     "sources": "https://github.com/5TN1rcZRS79VAEFuUCRB/MCPersist"
   },
-  "license": "MIT",
+  "license": "GPL-3.0-or-later",
   "icon": "mcpersist_icon.png",
   "environment": "*",
   "entrypoints": {

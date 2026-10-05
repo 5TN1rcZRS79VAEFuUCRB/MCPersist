@@ -93,7 +93,10 @@ token from CurseForge's account settings) and a `CURSEFORGE_PROJECT_ID` variable
 
 ## Credits and license
 
-Based on e4mc by Skye. MIT licensed; see [LICENSE](LICENSE).
+Licensed under GPL-3.0-or-later; see [LICENSE](LICENSE).
+
+Based on e4mc by Skye, which is MIT licensed. Its original notice is kept in
+[LICENSE-MIT-e4mc](LICENSE-MIT-e4mc).
 
 Bundles [iroh-java](https://github.com/vgskye/iroh-java), also by Skye, MIT licensed; see
 [its LICENSE](https://github.com/vgskye/iroh-java/blob/main/LICENSE).
