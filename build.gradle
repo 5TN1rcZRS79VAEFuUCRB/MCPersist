@@ -1,3 +1,22 @@
+import org.objectweb.asm.ClassReader
+import org.objectweb.asm.ClassVisitor
+import org.objectweb.asm.ClassWriter
+import org.objectweb.asm.MethodVisitor
+import org.objectweb.asm.Opcodes
+
+import java.util.zip.ZipEntry
+import java.util.zip.ZipFile
+import java.util.zip.ZipOutputStream
+
+buildscript {
+    repositories {
+        mavenCentral()
+    }
+    dependencies {
+        classpath 'org.ow2.asm:asm:9.8'
+    }
+}
+
 // The mod is built by the fabric project; see fabric/build.gradle.
 
 // The QUIC (relay) and iroh-java (peer-to-peer) native libraries go in each jar, so nothing is
@@ -34,6 +53,103 @@ tasks.register('fetchNatives') {
             if (file.bytes.digest('SHA-256') != sha256) {
                 file.delete()
                 throw new GradleException("$name from natives.e4mc.link doesn't match its pinned SHA-256")
+            }
+        }
+    }
+}
+
+// The QUIC and iroh-java libraries download their native library when its path property isn't
+// set. MCPersist always sets it, but mod hosts reject a jar that holds download code at all, so
+// each loader project bundles copies whose loader method only loads the library at that path.
+// The copies keep their coordinates and are served from a repository in the build folder.
+def patchedLibraries = [
+    [module: 'io.netty.incubator:netty-incubator-codec-classes-quic', version: quic_version,
+     className: 'io/netty/incubator/codec/quic/Quiche', property: 'link.e4mc.native_path'],
+    [module: 'link.e4mc:iroh-java', version: iroh_java_version,
+     className: 'link/e4mc/iroh/Native', property: 'link.e4mc.dialtone.native_path'],
+]
+def patchedRepo = layout.buildDirectory.dir('patched-maven').get().asFile
+
+repositories {
+    maven { url 'https://maven.is-quite.gay/' }
+}
+
+patchedLibraries.each { library ->
+    def (group, name) = library.module.split(':')
+    File dir = new File(patchedRepo, "${group.replace('.', '/')}/$name/${library.version}")
+    File jar = new File(dir, "$name-${library.version}.jar")
+    if (jar.isFile()) {
+        return
+    }
+    File original = configurations.detachedConfiguration(dependencies.create("${library.module}:${library.version}"))
+            .tap { transitive = false }.singleFile
+    dir.mkdirs()
+    new ZipFile(original).withCloseable { zip ->
+        new ZipOutputStream(new FileOutputStream(jar)).withCloseable { out ->
+            zip.entries().each { ZipEntry entry ->
+                // Signatures and digests would no longer match the patched class.
+                if (entry.name ==~ /META-INF\/[^\/]+\.(SF|RSA|DSA|EC)/) {
+                    return
+                }
+                byte[] bytes = zip.getInputStream(entry).bytes
+                if (entry.name == "${library.className}.class") {
+                    bytes = loadOnlyFromPath(bytes, library.property)
+                    if (new String(bytes, 'ISO-8859-1').contains('natives.e4mc.link')) {
+                        throw new GradleException("${library.module} still holds its native download URL")
+                    }
+                }
+                out.putNextEntry(new ZipEntry(entry.name))
+                out.write(bytes)
+                out.closeEntry()
+            }
+        }
+    }
+    new File(dir, "$name-${library.version}.pom").text = """<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>$group</groupId>
+  <artifactId>$name</artifactId>
+  <version>${library.version}</version>
+</project>
+"""
+}
+
+/** The class with its loadNativeLibrary() replaced by System.load(System.getProperty(property)). */
+static byte[] loadOnlyFromPath(byte[] bytes, String property) {
+    // Without the reader, the writer builds a new constant pool, so the old body's strings go.
+    ClassWriter writer = new ClassWriter(ClassWriter.COMPUTE_MAXS)
+    boolean replaced = false
+    new ClassReader(bytes).accept(new ClassVisitor(Opcodes.ASM9, writer) {
+        @Override
+        MethodVisitor visitMethod(int access, String name, String descriptor, String signature, String[] exceptions) {
+            MethodVisitor method = super.visitMethod(access, name, descriptor, signature, exceptions)
+            if (name != 'loadNativeLibrary' || descriptor != '()V') {
+                return method
+            }
+            replaced = true
+            method.visitCode()
+            method.visitLdcInsn(property)
+            method.visitMethodInsn(Opcodes.INVOKESTATIC, 'java/lang/System', 'getProperty', '(Ljava/lang/String;)Ljava/lang/String;', false)
+            method.visitMethodInsn(Opcodes.INVOKESTATIC, 'java/lang/System', 'load', '(Ljava/lang/String;)V', false)
+            method.visitInsn(Opcodes.RETURN)
+            method.visitMaxs(0, 0)
+            method.visitEnd()
+            return null
+        }
+    }, 0)
+    if (!replaced) {
+        throw new GradleException("no loadNativeLibrary() to replace")
+    }
+    return writer.toByteArray()
+}
+
+subprojects {
+    repositories {
+        exclusiveContent {
+            forRepository {
+                maven { url patchedRepo }
+            }
+            filter {
+                patchedLibraries.each { library -> includeModule(*library.module.split(':')) }
             }
         }
     }

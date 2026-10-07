@@ -17,7 +17,6 @@ import java.util.Properties;
  * with nothing but the copied launcher jar on the classpath ({@link #main}).
  */
 public final class Launcher {
-    static final String SERVER_JAR = "fabric-server-launch.jar";
     static final String LAUNCH_FILE = "mcpersist-launch.txt";
     static final String PID_FILE = "mcpersist.pid";
     static final String FAILURE_FILE = "mcpersist-failure.txt";

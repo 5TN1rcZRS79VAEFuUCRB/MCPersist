@@ -55,7 +55,7 @@ MCPersist v1, the Windows app, is discontinued and its relay is shut down. Its c
 
 Download the jar for your loader from [Modrinth](https://modrinth.com/mod/mcpersist),
 [CurseForge](https://www.curseforge.com/minecraft/mc-mods/mcpersist) or [GitHub Releases](../../releases). A world's background server runs the same loader and mods as the
-game that hands it off; the first handoff installs that loader's server, which takes up to a minute.
+game that hands it off, run from the game's own installation: MCPersist downloads nothing.
 
 MCPersist can't be installed alongside e4mc.
 
@@ -77,8 +77,8 @@ each loader's project: Fabric Loom, ModDevGradle and ForgeGradle.
 python test/smoke.py fabric/build/libs/mcpersist-fabric-<version>.jar
 ```
 
-The smoke test downloads the jar's loader server and runs it with the mod; pass a NeoForge or Forge jar to
-test that loader.
+The smoke test downloads the jar's loader server and a client installation (for the handoff to run its server
+from) and runs them with the mod; pass a NeoForge or Forge jar to test that loader.
 
 ## Releasing
 

@@ -3,7 +3,8 @@
 Usage: python test/smoke.py <path to mcpersist-{fabric,neoforge,forge}-*.jar>
 
 Needs Java for the target Minecraft version on PATH, or its path in $JAVA. Downloads the
-loader's server (and Fabric API for Fabric) into a temporary directory. Accepts the
+loader's server, a client installation for the handoff to run its server from (as a launcher
+would install it), and Fabric API for Fabric into a temporary directory. Accepts the
 Minecraft EULA for these throwaway servers.
 
 With $MCPERSIST_RELAY set to an mcpersist-relay binary, also checks world addresses against
@@ -110,6 +111,52 @@ def install_server(cache):
     download(f"{maven}/{version}/{LOADER}-{version}-installer.jar", cache / "installer.jar")
     subprocess.run([os.environ.get("JAVA", "java"), "-jar", "installer.jar", "--installServer", "installed-server"],
                    cwd=cache, check=True, stdout=subprocess.DEVNULL)
+
+
+def install_client(cache):
+    """The game as a launcher installs it: the handoff runs the background server from it.
+    Writes its classpath, as the game would run with it, and for NeoForge its libraryDirectory
+    and NeoForm version."""
+    client = cache / "client"
+    libraries = client / "libraries"
+    classpath = []
+
+    def library(path, url):
+        dest = libraries / path
+        if not dest.exists():
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            download(url, dest)
+        classpath.append(str(dest))
+
+    manifest = get_json("https://piston-meta.mojang.com/mc/game/version_manifest_v2.json")
+    vanilla = get_json(next(v["url"] for v in manifest["versions"] if v["id"] == MINECRAFT_VERSION))
+    # Libraries with rules are platform natives, which only the client's window needs.
+    for lib in vanilla["libraries"]:
+        if "rules" not in lib and "artifact" in lib.get("downloads", {}):
+            library(lib["downloads"]["artifact"]["path"], lib["downloads"]["artifact"]["url"])
+    if LOADER == "fabric":
+        loader = (cache / "loader.txt").read_text()
+        for lib in get_json(f"{FABRIC_META}/loader/{MINECRAFT_VERSION}/{loader}/profile/json")["libraries"]:
+            group, artifact, version = lib["name"].split(":")
+            path = f"{group.replace('.', '/')}/{artifact}/{version}/{artifact}-{version}.jar"
+            library(path, lib["url"].rstrip("/") + "/" + path)
+    else:
+        client.mkdir(exist_ok=True)
+        (client / "launcher_profiles.json").write_text('{"profiles": {}}')
+        subprocess.run([os.environ.get("JAVA", "java"), "-jar", "installer.jar", "--installClient", str(client)],
+                       cwd=cache, check=True, stdout=subprocess.DEVNULL)
+        profile_dir = next(d for d in (client / "versions").iterdir() if d.name != MINECRAFT_VERSION)
+        profile = json.loads((profile_dir / f"{profile_dir.name}.json").read_text())
+        classpath += [str(libraries / lib["downloads"]["artifact"]["path"]) for lib in profile["libraries"]]
+        game_args = profile["arguments"]["game"]
+        if LOADER == "neoforge":
+            (cache / "neoform.txt").write_text(game_args[game_args.index("--fml.neoFormVersion") + 1])
+    jar = client / "versions" / MINECRAFT_VERSION / f"{MINECRAFT_VERSION}.jar"
+    if not jar.exists():
+        jar.parent.mkdir(parents=True, exist_ok=True)
+        download(vanilla["downloads"]["client"]["url"], jar)
+    classpath.append(str(jar))
+    (cache / "classpath.txt").write_text(os.pathsep.join(classpath))
 
 
 def prepare_server(root, cache, mod_config):
@@ -481,6 +528,9 @@ def hand_off(cache, game, world, servers):
          "--world", str(world), "--mods", str(game / "mods"), "--config", str(game / "config"),
          "--servers", str(servers), "--minecraft", MINECRAFT_VERSION,
          "--loader", LOADER, "--loader-version", (cache / "loader.txt").read_text(), "--xmx", "768M",
+         "--classpath", (cache / "classpath.txt").read_text(),
+         *(["--neoform-version", (cache / "neoform.txt").read_text(), "--libraries", str(cache / "client" / "libraries")]
+           if LOADER == "neoforge" else []),
          "--host", f"{HOST[0]}:{HOST[1]}", "--players", f"{FRIEND[0]}:{FRIEND[1]},{REMOVED[0]}:{REMOVED[1]}",
          "--whitelist", str(game / "whitelist.json")],
         capture_output=True, text=True, timeout=300, env=handoff_env(),
@@ -678,6 +728,8 @@ def check_server_folder(server_dir, world):
     launch = (server_dir / "mcpersist-launch.txt").read_text().splitlines()
     if "-Xmx768M" not in launch:
         fail(f"server not launched with the game's -Xmx: {launch}")
+    if (server_dir / "libraries").exists() or list(server_dir.glob("*.jar")) != [server_dir / "mcpersist-launcher.jar"]:
+        fail(f"the handoff installed a server instead of running the game's: {sorted(server_dir.iterdir())}")
     if not (world / "level.dat").exists():
         fail("the server did not run the world in place")
 
@@ -694,6 +746,7 @@ def main():
     with tempfile.TemporaryDirectory() as tmp:
         cache = Path(tmp)
         download_server(cache, mod_jar)
+        install_client(cache)
         download_voicechat(cache)
         test_commands(cache)
         relay_bin = os.environ.get("MCPERSIST_RELAY")

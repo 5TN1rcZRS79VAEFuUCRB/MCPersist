@@ -9,15 +9,12 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.DataInputStream;
+import java.io.File;
 import java.io.OutputStream;
 import java.net.ConnectException;
 import java.net.InetAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
-import java.net.URI;
-import java.net.http.HttpClient;
-import java.net.http.HttpRequest;
-import java.net.http.HttpResponse;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.charset.StandardCharsets;
@@ -30,6 +27,7 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Base64;
+import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -47,10 +45,8 @@ import java.util.zip.ZipFile;
  * command line ({@link #main}) for tests.
  */
 public final class Handoff {
-    private static final String FABRIC_META = "https://meta.fabricmc.net/v2/versions";
-    private static final String NEOFORGE_MAVEN = "https://maven.neoforged.net/releases/net/neoforged/neoforge";
-    private static final String FORGE_MAVEN = "https://maven.minecraftforge.net/net/minecraftforge/forge";
     private static final String SESSION_MARKER = "mcpersist-session-open";
+    private static final String CLASSPATH_FILE = "mcpersist-classpath.txt";
     private static final Gson GSON = new Gson();
     private static final UUID NIL = new UUID(0, 0);
 
@@ -62,6 +58,9 @@ public final class Handoff {
      * @param clientConfigDir the client's config folder; MCPersist's config is copied
      * @param serversDir      where per-world server folders live
      * @param loader          "fabric", "neoforge" or "forge": the server runs the game's loader
+     * @param neoFormVersion  NeoForge's --fml.neoFormVersion, or null for the other loaders
+     * @param classpath       the game's classpath: the server runs from the game's own installation
+     * @param libraries       NeoForge's libraryDirectory, or null for the other loaders
      * @param java            the Java executable to run the server with
      * @param maxHeap         the -Xmx value, e.g. "4G"
      * @param host            the world's owner: whitelisted, op level 4
@@ -73,7 +72,8 @@ public final class Handoff {
      *                        removals carry over, and {@code players} isn't needed
      */
     public record Spec(Path worldDir, Path clientModsDir, Path clientConfigDir, Path serversDir,
-                       String minecraftVersion, String loader, String loaderVersion, Path java, String maxHeap,
+                       String minecraftVersion, String loader, String loaderVersion, String neoFormVersion,
+                       List<Path> classpath, Path libraries, Path java, String maxHeap,
                        Player host, List<Player> players, Path launcherJar, Path hostWhitelist) {}
 
     private Handoff() {}
@@ -90,7 +90,7 @@ public final class Handoff {
         Launcher.requireUnlocked(spec.worldDir());
         Path dir = serverDir(spec.serversDir(), spec.worldDir());
         Files.createDirectories(dir);
-        List<String> server = installServer(dir, spec);
+        List<String> server = serverLaunch(dir, spec);
         copyMods(spec.clientModsDir(), dir.resolve("mods"));
         copyConfig(spec.clientConfigDir(), dir.resolve("config"));
         // The host turned persistence on for this world, which runs it as a Minecraft server.
@@ -136,68 +136,107 @@ public final class Handoff {
     }
 
     /**
-     * Installs the loader's server into the folder unless it's already there, and returns the
-     * arguments that launch it. Fabric's is one launcher jar; NeoForge's and Forge's installers
-     * write their libraries and an arguments file.
+     * The arguments that start the loader's dedicated server from the game's own installation,
+     * so nothing is downloaded: Minecraft's client jar holds the server too. Fabric's server
+     * runs from the game's classpath as is, Forge's from its patched client jar. NeoForge's
+     * finds its patched jar in a library folder, so the server gets one holding the client's
+     * under the server's name.
      */
-    private static List<String> installServer(Path dir, Spec spec) throws IOException, InterruptedException {
-        String mc = spec.minecraftVersion();
-        String loader = spec.loader();
-        List<String> launch;
-        Path installed;
-        if (loader.equals("fabric")) {
-            launch = List.of("-jar", Launcher.SERVER_JAR);
-            installed = dir.resolve(Launcher.SERVER_JAR);
-        } else {
-            // Forge versions are published as "<minecraft>-<forge>".
-            String full = loader.equals("forge") ? mc + "-" + spec.loaderVersion() : spec.loaderVersion();
-            String group = loader.equals("forge") ? "minecraftforge" : "neoforged";
-            String args = System.getProperty("os.name").startsWith("Windows") ? "win_args.txt" : "unix_args.txt";
-            String argsFile = String.join("/", "libraries", "net", group, loader, full, args);
-            launch = List.of("@" + argsFile);
-            installed = dir.resolve(argsFile);
-        }
-        Path versionFile = dir.resolve("mcpersist-server-version.txt");
-        String version = loader + " " + mc + " " + spec.loaderVersion();
-        if (Files.exists(installed) && Files.exists(versionFile) && Files.readString(versionFile).equals(version)) {
-            return launch;
-        }
-        switch (loader) {
+    private static List<String> serverLaunch(Path dir, Spec spec) throws IOException {
+        List<Path> classpath = new ArrayList<>(spec.classpath());
+        List<String> jvm;
+        List<String> main;
+        switch (spec.loader()) {
             case "fabric" -> {
-                JsonArray installers = GSON.fromJson(get(FABRIC_META + "/installer"), JsonArray.class);
-                String installer = installers.get(0).getAsJsonObject().get("version").getAsString();
-                download(FABRIC_META + "/loader/" + mc + "/" + spec.loaderVersion() + "/" + installer + "/server/jar",
-                        dir.resolve(Launcher.SERVER_JAR));
+                jvm = List.of();
+                main = List.of("net.fabricmc.loader.impl.launch.knot.KnotServer");
             }
-            case "neoforge" -> runInstaller(dir, spec.java(), NEOFORGE_MAVEN + "/" + spec.loaderVersion()
-                    + "/neoforge-" + spec.loaderVersion() + "-installer.jar");
-            case "forge" -> runInstaller(dir, spec.java(), FORGE_MAVEN + "/" + mc + "-" + spec.loaderVersion()
-                    + "/forge-" + mc + "-" + spec.loaderVersion() + "-installer.jar");
-            default -> throw new IllegalArgumentException("unknown loader " + loader);
+            case "neoforge" -> {
+                jvm = List.of("-Djava.net.preferIPv6Addresses=system",
+                        "-DlibraryDirectory=" + neoForgeLibraries(dir, spec.libraries(), spec.loaderVersion()),
+                        "--add-opens", "java.base/java.lang.invoke=ALL-UNNAMED",
+                        "--add-exports", "jdk.naming.dns/com.sun.jndi.dns=java.naming");
+                main = List.of("net.neoforged.fml.startup.Server",
+                        "--fml.neoForgeVersion", spec.loaderVersion(),
+                        "--fml.mcVersion", spec.minecraftVersion(),
+                        "--fml.neoFormVersion", spec.neoFormVersion());
+            }
+            case "forge" -> {
+                // Forge versions are published as "<minecraft>-<forge>". Launchers that patch
+                // the client at launch leave its patched jar off the classpath.
+                String forge = "forge-" + spec.minecraftVersion() + "-" + spec.loaderVersion();
+                Path universal = classpath.stream()
+                        .filter(jar -> jar.getFileName().toString().equals(forge + "-universal.jar"))
+                        .findFirst()
+                        .orElseThrow(() -> new IOException(forge + "-universal.jar isn't on the game's classpath"));
+                Path client = universal.resolveSibling(forge + "-client.jar");
+                if (!Files.exists(client)) {
+                    throw new IOException("Forge's patched client jar is missing: " + client);
+                }
+                // It replaces Minecraft's own jar, which the game's classpath can hold too.
+                classpath.removeIf(Handoff::holdsMinecraft);
+                classpath.add(client);
+                jvm = List.of("-Djava.net.preferIPv6Addresses=system", "-XX:+UseCompactObjectHeaders", "-XX:StackShadowPages=32");
+                main = List.of("net.minecraftforge.bootstrap.ForgeBootstrap", "--launchTarget", "forge_server");
+            }
+            default -> throw new IllegalArgumentException("unknown loader " + spec.loader());
         }
-        if (!Files.exists(installed)) {
-            throw new IOException("the " + loader + " server installer didn't create " + installed);
-        }
-        Files.writeString(versionFile, version);
+        // In an argument file: Windows limits a command line's length, and Linux reports only its
+        // start, which has to hold the main class for process() to recognize the server.
+        String joined = String.join(File.pathSeparator, classpath.stream().map(Path::toString).toList());
+        Files.writeString(dir.resolve(CLASSPATH_FILE), "-cp \"" + joined.replace("\\", "\\\\").replace("\"", "\\\"") + "\"\n");
+        List<String> launch = new ArrayList<>(jvm);
+        launch.add("@" + CLASSPATH_FILE);
+        launch.addAll(main);
         return launch;
     }
 
-    /** Runs a NeoForge or Forge server installer into the folder; its output goes to a log there. */
-    private static void runInstaller(Path dir, Path java, String url) throws IOException, InterruptedException {
-        Path installer = dir.resolve("mcpersist-installer.jar");
-        download(url, installer);
-        Path log = dir.resolve("logs").resolve("mcpersist-install.log");
-        Files.createDirectories(log.getParent());
-        Process process = new ProcessBuilder(java.toString(), "-jar", installer.toString(), "--installServer", dir.toString())
-                .directory(dir.toFile())
-                .redirectErrorStream(true)
-                .redirectOutput(log.toFile())
-                .start();
-        process.getOutputStream().close();
-        int code = process.waitFor();
-        Files.deleteIfExists(installer);
-        if (code != 0) {
-            throw new IOException("the server installer failed (exit " + code + "); see " + log);
+    private static boolean holdsMinecraft(Path jar) {
+        try (ZipFile zip = new ZipFile(jar.toFile())) {
+            return zip.getEntry("net/minecraft/server/Main.class") != null;
+        } catch (IOException e) {
+            return false;
+        }
+    }
+
+    /**
+     * A library folder for NeoForge's server: the game's patched client jar, which holds the
+     * server too, under the server's name, and NeoForge's own jar. Hard links where the file
+     * system allows them, copies otherwise.
+     */
+    private static Path neoForgeLibraries(Path dir, Path gameLibraries, String version) throws IOException {
+        if (gameLibraries == null) {
+            throw new IOException("NeoForge's libraryDirectory isn't set");
+        }
+        Path from = gameLibraries.resolve("net").resolve("neoforged");
+        Path libraries = dir.resolve("mcpersist-libraries");
+        Path to = libraries.resolve("net").resolve("neoforged");
+        deleteTree(libraries);
+        linkOrCopy(from.resolve("minecraft-client-patched").resolve(version).resolve("minecraft-client-patched-" + version + ".jar"),
+                to.resolve("minecraft-server-patched").resolve(version).resolve("minecraft-server-patched-" + version + ".jar"));
+        String neoForge = "neoforge-" + version + "-universal.jar";
+        linkOrCopy(from.resolve("neoforge").resolve(version).resolve(neoForge),
+                to.resolve("neoforge").resolve(version).resolve(neoForge));
+        return libraries.toAbsolutePath();
+    }
+
+    private static void linkOrCopy(Path from, Path to) throws IOException {
+        Files.createDirectories(to.getParent());
+        try {
+            Files.createLink(to, from);
+        } catch (IOException | UnsupportedOperationException e) {
+            Files.copy(from, to);
+        }
+    }
+
+    private static void deleteTree(Path root) throws IOException {
+        if (!Files.exists(root)) {
+            return;
+        }
+        try (var paths = Files.walk(root)) {
+            for (Path path : paths.sorted(Comparator.reverseOrder()).toList()) {
+                Files.delete(path);
+            }
         }
     }
 
@@ -346,13 +385,17 @@ public final class Handoff {
         return Base64.getUrlEncoder().withoutPadding().encodeToString(bytes);
     }
 
-    /** What its command line holds that other programs' don't: the server jar or arguments file. */
-    private static String serverArgument(Path dir) {
+    /**
+     * What its command line holds that other programs' don't: the loader's server main class
+     * or, for a server launched by an older MCPersist, its server jar or arguments file.
+     */
+    private static Optional<String> serverArgument(Path dir) {
         try {
             List<String> launch = Files.readAllLines(dir.resolve(Launcher.LAUNCH_FILE));
-            return launch.get(launch.size() - 2);
+            int classpath = launch.indexOf("@" + CLASSPATH_FILE);
+            return Optional.of(launch.get(classpath >= 0 ? classpath + 1 : launch.size() - 2));
         } catch (IOException | IndexOutOfBoundsException e) {
-            return Launcher.SERVER_JAR;
+            return Optional.empty();
         }
     }
 
@@ -366,7 +409,7 @@ public final class Handoff {
             return ProcessHandle.of(Long.parseLong(Files.readString(pidFile).trim()))
                     .filter(ProcessHandle::isAlive)
                     // A reused PID belongs to some other program.
-                    .filter(p -> p.info().commandLine().map(c -> c.contains(serverArgument(dir))).orElse(true));
+                    .filter(p -> p.info().commandLine().map(c -> serverArgument(dir).filter(c::contains).isPresent()).orElse(true));
         } catch (IOException | NumberFormatException e) {
             return Optional.empty();
         }
@@ -567,34 +610,11 @@ public final class Handoff {
         }
     }
 
-    private static final HttpClient HTTP = HttpClient.newBuilder().followRedirects(HttpClient.Redirect.NORMAL).build();
-
-    private static String get(String url) throws IOException, InterruptedException {
-        HttpResponse<String> response = HTTP.send(
-                HttpRequest.newBuilder(URI.create(url)).header("User-Agent", "MCPersist").build(),
-                HttpResponse.BodyHandlers.ofString());
-        if (response.statusCode() != 200) {
-            throw new IOException("GET " + url + " returned " + response.statusCode());
-        }
-        return response.body();
-    }
-
-    private static void download(String url, Path dest) throws IOException, InterruptedException {
-        Path tmp = dest.resolveSibling(dest.getFileName() + ".part");
-        HttpResponse<Path> response = HTTP.send(
-                HttpRequest.newBuilder(URI.create(url)).header("User-Agent", "MCPersist").build(),
-                HttpResponse.BodyHandlers.ofFile(tmp));
-        if (response.statusCode() != 200) {
-            Files.deleteIfExists(tmp);
-            throw new IOException("GET " + url + " returned " + response.statusCode());
-        }
-        Files.move(tmp, dest, StandardCopyOption.REPLACE_EXISTING);
-    }
-
     /**
      * Command-line entry point, for tests. {@code --action start} (the default) takes {@code
-     * --world --mods --config --servers --minecraft --loader --loader-version --host uuid:name [--players
-     * uuid:name,...] [--xmx]} and prints the server folder once it has started;
+     * --world --mods --config --servers --minecraft --loader --loader-version --classpath --host uuid:name
+     * [--neoform-version --libraries] [--players uuid:name,...] [--xmx] [--whitelist]} (the classpath
+     * and libraries of an installed game) and prints the server folder once it has started;
      * {@code --action status|stop|disable} take {@code --world --servers}; {@code --action problems}
      * takes {@code --servers}.
      */
@@ -636,6 +656,9 @@ public final class Handoff {
                 options.getProperty("minecraft"),
                 options.getProperty("loader"),
                 options.getProperty("loader-version"),
+                options.getProperty("neoform-version"),
+                Arrays.stream(options.getProperty("classpath").split(File.pathSeparator)).map(Path::of).toList(),
+                options.containsKey("libraries") ? Path.of(options.getProperty("libraries")) : null,
                 java,
                 options.getProperty("xmx", "1G"),
                 player(options.getProperty("host")),

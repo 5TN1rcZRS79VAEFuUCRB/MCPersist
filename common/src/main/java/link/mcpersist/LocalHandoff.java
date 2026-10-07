@@ -3,8 +3,10 @@ package link.mcpersist;
 import link.mcpersist.handoff.Handoff;
 import net.minecraft.server.players.PlayerList;
 
+import java.io.File;
 import java.lang.management.ManagementFactory;
 import java.nio.file.Path;
+import java.util.Arrays;
 import java.util.List;
 
 /** Hands this game's worlds to background servers using this game's own setup. */
@@ -26,6 +28,13 @@ public final class LocalHandoff {
                 Agnos.modVersion("minecraft"),
                 Agnos.LOADER,
                 Agnos.loaderVersion(),
+                Agnos.neoFormVersion(),
+                // Absolute, since the server runs in its own folder.
+                Arrays.stream(System.getProperty("java.class.path").split(File.pathSeparator))
+                        .filter(entry -> !entry.isEmpty())
+                        .map(entry -> Path.of(entry).toAbsolutePath())
+                        .toList(),
+                System.getProperty("libraryDirectory") != null ? Path.of(System.getProperty("libraryDirectory")).toAbsolutePath() : null,
                 ProcessHandle.current().info().command().map(Path::of).orElseThrow(),
                 maxHeap(),
                 host,

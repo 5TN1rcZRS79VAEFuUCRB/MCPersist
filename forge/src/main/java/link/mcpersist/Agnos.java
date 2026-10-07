@@ -27,9 +27,14 @@ public class Agnos {
         return ModList.getModContainerById(modId).orElseThrow().getModInfo().getVersion().toString();
     }
 
-    /** The version of the loader itself, as its server installer names it. */
+    /** The version of the loader itself, as its library jars name it. */
     public static String loaderVersion() {
         return modVersion("forge");
+    }
+
+    /** NeoForge's --fml.neoFormVersion, which its server needs too; null on other loaders. */
+    public static String neoFormVersion() {
+        return null;
     }
 
     public static Path jarPath() {
