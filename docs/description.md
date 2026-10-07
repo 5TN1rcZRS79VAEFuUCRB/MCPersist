@@ -29,6 +29,7 @@ Your friends join by adding the address as a server in Multiplayer. If they inst
 
 - **Alpha:** built for **Minecraft 26.3** on **Fabric** (with Fabric API), **NeoForge** or **Forge**. Back up your worlds.
 - **Only the host needs the mod.** Players can join with an unmodded game.
+- **Works on dedicated servers too.** Put the mod in the server's mods folder and the server gets a permanent address, written to its log. The server's own whitelist setting decides who can join.
 - **Simple Voice Chat works** through the relay, with no extra ports to open.
 - **Relays in Chicago and Frankfurt.** MCPersist hosts through whichever is closer to you, automatically. [Relay status](https://stats.uptimerobot.com/zCMpp0FH4u)
 - **The background server runs on your computer.** It uses memory and CPU while it runs and only works while your computer is on. It starts again when you log in, until you stop it or open the world yourself.

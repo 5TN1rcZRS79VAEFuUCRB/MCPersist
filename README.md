@@ -59,6 +59,18 @@ game that hands it off, run from the game's own installation: MCPersist download
 
 MCPersist can't be installed alongside e4mc.
 
+## Dedicated servers
+
+MCPersist works on a dedicated server too: put the jar (and Fabric API, on Fabric) in the server's `mods`
+folder. When the server starts it connects to the relay and writes its address to the log
+(`Domain assigned: <address>`). The address stays the same across restarts: the first start gives the world
+a key, stored in `mcpersist.properties` in the world folder. Keep that file private, since it holds the
+address. Players with the mod connect peer-to-peer, as with a shared world.
+
+The server's own `white-list` setting in `server.properties` decides who can join. MCPersist doesn't turn it
+on, so a server without a whitelist is open to anyone who has the address. To keep a server off the relay,
+set `hostEnabled = false` in `config/mcpersist/mcpersist.toml`.
+
 ## Running costs
 
 The relays that carry worlds, voice chat and peer-to-peer connections cost about $11 a month: a server

@@ -6,6 +6,7 @@ import link.mcpersist.Config;
 import link.mcpersist.MCPersist;
 import link.mcpersist.QuiclimeSession;
 import link.mcpersist.SessionPlayers;
+import link.mcpersist.WorldPersistence;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.network.ServerConnectionListener;
 import net.minecraft.world.level.storage.LevelResource;
@@ -18,7 +19,9 @@ import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.ModifyArg;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
+import java.io.IOException;
 import java.net.InetAddress;
+import java.nio.file.Path;
 
 @Mixin(ServerConnectionListener.class)
 public abstract class ServerConnectionListenerMixin {
@@ -52,7 +55,11 @@ public abstract class ServerConnectionListenerMixin {
         mcpersist$childHandler = null;
         mcpersist$group = null;
         if (Config.hostEnabled) {
-            QuiclimeSession session = new QuiclimeSession(handler, group, server.getWorldPath(LevelResource.ROOT));
+            Path worldDir = server.getWorldPath(LevelResource.ROOT);
+            if (server.isDedicatedServer()) {
+                mcpersist$keepAddress(worldDir);
+            }
+            QuiclimeSession session = new QuiclimeSession(handler, group, worldDir);
             MCPersist.session = session;
             if (server.isDedicatedServer()) {
                 // A dedicated server listens before it's up, and drops logins until its first
@@ -64,6 +71,22 @@ public abstract class ServerConnectionListenerMixin {
             } else {
                 session.startAsync();
             }
+        }
+    }
+
+    /**
+     * Gives a plain server's world a key, so it keeps its address across restarts. A world
+     * that already has one is left alone: persistence turned off keeps its random address.
+     */
+    @Unique
+    private static void mcpersist$keepAddress(Path worldDir) {
+        if (WorldPersistence.hasKey(worldDir)) {
+            return;
+        }
+        try {
+            WorldPersistence.setPersistent(worldDir, true);
+        } catch (IOException e) {
+            MCPersist.LOGGER.error("Failed to give {} a permanent address; it gets a random one", worldDir, e);
         }
     }
 

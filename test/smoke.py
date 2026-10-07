@@ -338,9 +338,15 @@ def test_stable_address(cache, relay_bin):
             server_root.mkdir()
             prepare_server(server_root, cache, mod_config)
             settings = server_root / "world" / "mcpersist.properties"
-            settings.parent.mkdir()
-            settings.write_text("persistent=true\nkey=smoke-test-world-key-0123456789\n")
 
+            # A plain server's world gets a key of its own on first start.
+            generated = run_for_domain(server_root, jvm_args)
+            if "key=" not in settings.read_text():
+                fail("server didn't give its world a key")
+            if run_for_domain(server_root, jvm_args) != generated:
+                fail(f"plain server world changed address after {generated!r}")
+
+            settings.write_text("persistent=true\nkey=smoke-test-world-key-0123456789\n")
             first = run_for_domain(server_root, jvm_args)
             second = run_for_domain(server_root, jvm_args)
             if not first.endswith("." + BASE_DOMAIN):
@@ -354,7 +360,8 @@ def test_stable_address(cache, relay_bin):
                 fail("a world with persistence off kept its permanent address")
         finally:
             relay.kill()
-    print(f"PASS: persistent world kept {first} across restarts; with persistence off it got {third}")
+    print(f"PASS: plain server world kept {generated}; persistent world kept {first} across restarts; "
+          f"with persistence off it got {third}")
 
 
 def test_relay_restart(cache, relay_bin):
