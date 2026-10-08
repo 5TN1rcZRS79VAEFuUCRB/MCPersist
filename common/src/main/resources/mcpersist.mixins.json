@@ -9,6 +9,8 @@
     "OwnerCommandsMixin",
     "ServerConnectionListenerMixin",
     "ServerLoginPacketListenerImplMixin",
+    "PlayerListModTipMixin",
+    "ServerboundCustomQueryAnswerPacketMixin",
     "ServerboundKeyPacketMixin"
   ],
   "injectors": {

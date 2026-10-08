@@ -69,7 +69,8 @@ address. Players with the mod connect peer-to-peer, as with a shared world.
 
 The server's own `white-list` setting in `server.properties` decides who can join. MCPersist doesn't turn it
 on, so a server without a whitelist is open to anyone who has the address. To keep a server off the relay,
-set `hostEnabled = false` in `config/mcpersist/mcpersist.toml`.
+set `hostEnabled = false` in `config/mcpersist/mcpersist.toml`. With `requireMod = true`, only players who have
+MCPersist can join; anyone else is turned away with a link to the mod.
 
 ## Running costs
 

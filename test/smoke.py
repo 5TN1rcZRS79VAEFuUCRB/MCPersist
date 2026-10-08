@@ -455,6 +455,105 @@ def test_relayed_leave(cache, relay_bin):
           f"{len(announcement)}-byte relay announcement arrived whole")
 
 
+def read_varint(sock):
+    n = shift = 0
+    while True:
+        byte = sock.recv(1)
+        if not byte:
+            raise EOFError("connection closed")
+        n |= (byte[0] & 0x7F) << shift
+        shift += 7
+        if not byte[0] & 0x80:
+            return n
+
+
+def read_packet(sock, compressed=False):
+    """A packet's ID and body; once compression is on, small ones still go uncompressed."""
+    length = read_varint(sock)
+    data = b""
+    while len(data) < length:
+        chunk = sock.recv(length - len(data))
+        if not chunk:
+            raise EOFError("connection closed")
+        data += chunk
+    if compressed:
+        size, data = data[0], data[1:]  # Uncompressed (size 0): ours stay under the threshold.
+        if size:
+            fail(f"unexpected compressed login packet of {size} bytes")
+    return data[0], data[1:]  # Login packet IDs fit in one byte.
+
+
+def login_answering(port, name, has_mod, host="127.0.0.1"):
+    """Logs in, answers MCPersist's login query as a client with or without the mod, and
+    returns the ID and body of the server's next packet."""
+    with socket.create_connection(("127.0.0.1", port), timeout=30) as player:
+        player.sendall(packet(0, varint(777) + varint(len(host)) + host.encode() + struct.pack(">H", port) + varint(2)))
+        player.sendall(packet(0, varint(len(name)) + name.encode() + uuid.uuid4().bytes))
+        packet_id, body = read_packet(player)
+        # Fabric API turns compression on before its login queries; vanilla, after.
+        compressed = packet_id == 0x03
+        if compressed:
+            packet_id, body = read_packet(player, compressed)
+        if packet_id != 0x04 or b"mcpersist:hello" not in body:
+            fail(f"expected MCPersist's login query, got packet {packet_id:#x}: {body[:200]!r}")
+        transaction = body[:5]  # A varint; ours takes 5 bytes.
+        # Custom Query Answer: a client without the mod has no payload; one with it sends one.
+        answer = varint(0x02) + transaction + (b"\x01" if has_mod else b"\x00")
+        if compressed:
+            answer = b"\x00" + answer
+        player.sendall(varint(len(answer)) + answer)
+        return read_packet(player, compressed)
+
+
+def test_require_mod(cache):
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        prepare_server(root, cache, "hostEnabled = false\nrequireMod = true\n")
+        properties = (root / "server.properties").read_text()
+        port = int(re.search(r"server-port=(\d+)", properties).group(1))
+        with open(root / "server.properties", "a") as f:
+            f.write("white-list=false\n")
+        server = Server(root)
+        server.wait_for("Done (", timeout=300)
+        time.sleep(2)  # The server drops logins until its first tick.
+        packet_id, body = login_answering(port, "Unmodded", has_mod=False)
+        if packet_id != 0x00 or b"requires the MCPersist mod" not in body:
+            fail(f"a player without the mod wasn't turned away: packet {packet_id:#x} {body[:200]!r}", server)
+        packet_id, body = login_answering(port, "Modded", has_mod=True)
+        # Set Compression, then Login Success: the login went on.
+        if packet_id not in (0x02, 0x03):
+            fail(f"a player with the mod was refused: packet {packet_id:#x} {body[:200]!r}", server)
+        server.stop_cleanly()
+    print("PASS: with requireMod, a player without MCPersist was turned away and one with it got in")
+
+
+def test_relayed_without_mod(cache, relay_bin):
+    """A player who joins through the relay is asked for the mod, so it can be suggested to
+    them, and gets in without it."""
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        relay, jvm_args, mod_config, mc_port, _ = start_relay(relay_bin, root)
+        try:
+            server_root = root / "server"
+            server_root.mkdir()
+            # Asked only when the host offers peer-to-peer.
+            prepare_server(server_root, cache, mod_config.replace("dialtoneHostEnabled = false", "dialtoneHostEnabled = true"))
+            with open(server_root / "server.properties", "a") as properties:
+                properties.write("white-list=false\n")
+            server = Server(server_root, jvm_args)
+            domain = server.wait_for("Domain assigned: ", timeout=300).split("Domain assigned: ", 1)[1].strip()
+            if not any("Done (" in logged for logged in server.log):
+                server.wait_for("Done (", timeout=300)
+            time.sleep(2)  # The server drops logins until its first tick.
+            packet_id, body = login_answering(mc_port, "Relayed", has_mod=False, host=domain)
+            if packet_id not in (0x02, 0x03):
+                fail(f"a player without the mod was refused through the relay: packet {packet_id:#x} {body[:200]!r}", server)
+            server.stop_cleanly()
+        finally:
+            relay.kill()
+    print("PASS: a player without the mod was asked for it through the relay and got in")
+
+
 def process_alive(pid):
     if os.name == "nt":
         out = subprocess.run(["tasklist", "/FI", f"PID eq {pid}", "/NH"], capture_output=True, text=True).stdout
@@ -756,10 +855,12 @@ def main():
         install_client(cache)
         download_voicechat(cache)
         test_commands(cache)
+        test_require_mod(cache)
         relay_bin = os.environ.get("MCPERSIST_RELAY")
         if relay_bin:
             test_stable_address(cache, relay_bin)
             test_relayed_leave(cache, relay_bin)
+            test_relayed_without_mod(cache, relay_bin)
             test_relay_restart(cache, relay_bin)
         else:
             print("SKIP: stable-address check (set MCPERSIST_RELAY to an mcpersist-relay binary)")

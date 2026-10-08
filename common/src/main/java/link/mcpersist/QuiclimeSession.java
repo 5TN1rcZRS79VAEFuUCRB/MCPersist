@@ -348,6 +348,10 @@ public class QuiclimeSession {
                                                             .withClickEvent(new ClickEvent.RunCommand("/mcpersist stop"))
                                                             .withColor(ChatFormatting.GRAY)));
                                             addMessage(message);
+                                            if (Config.dialtoneHostEnabled && attempt == 0) {
+                                                addMessage(Component.translatable("text.mcpersist.peerToPeerTip")
+                                                        .withStyle(ChatFormatting.GRAY));
+                                            }
                                             if (LocalHandoff.usesWhitelist() && attempt == 0) {
                                                 addMessage(Component.translatable("text.mcpersist.whitelistOn",
                                                         Component.literal("/whitelist add <name>").withStyle(it -> it

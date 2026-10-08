@@ -40,6 +40,8 @@ public final class Config {
     // On: a world's address stays the same across sessions, so anyone who learns it could come back.
     public static final boolean useWhiteList = flag("useWhiteList", true,
             "Whether to use whitelists on LAN worlds");
+    public static final boolean requireMod = flag("requireMod", false,
+            "Whether only players with MCPersist can join; for public servers, so the mod gets around");
     public static final boolean hostEnabled = flag("hostEnabled", true,
             "Whether to enable sharing LAN worlds with MCPersist");
     public static final boolean dialtoneHostEnabled = flag("dialtoneHostEnabled", true,

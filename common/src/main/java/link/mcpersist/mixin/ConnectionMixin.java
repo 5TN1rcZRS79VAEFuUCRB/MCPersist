@@ -4,6 +4,7 @@ import com.llamalad7.mixinextras.injector.wrapoperation.Operation;
 import com.llamalad7.mixinextras.injector.wrapoperation.WrapOperation;
 import io.netty.bootstrap.Bootstrap;
 import io.netty.channel.*;
+import io.netty.incubator.codec.quic.QuicStreamChannel;
 import link.mcpersist.DialtoneConnectionExtensions;
 import link.mcpersist.SmugglersInetSocketAddress;
 import link.mcpersist.dialtone.DialtoneAddress;
@@ -33,6 +34,24 @@ public abstract class ConnectionMixin implements DialtoneConnectionExtensions {
     @Override
     public boolean mcpersist$isDialtone() {
         return channel instanceof DialtoneChannel;
+    }
+
+    @Unique
+    private volatile boolean mcpersist$withoutMod;
+
+    @Override
+    public boolean mcpersist$isRelayed() {
+        return channel instanceof QuicStreamChannel;
+    }
+
+    @Override
+    public boolean mcpersist$withoutMod() {
+        return mcpersist$withoutMod;
+    }
+
+    @Override
+    public void mcpersist$markWithoutMod() {
+        mcpersist$withoutMod = true;
     }
 
     @Override
