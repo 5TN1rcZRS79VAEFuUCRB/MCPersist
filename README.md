@@ -53,8 +53,8 @@ MCPersist v1, the Windows app, is discontinued and its relay is shut down. Its c
   - NeoForge
   - Forge
 
-Download the jar for your loader from [Modrinth](https://modrinth.com/mod/mcpersist),
-[CurseForge](https://www.curseforge.com/minecraft/mc-mods/mcpersist) or [GitHub Releases](../../releases). A world's background server runs the same loader and mods as the
+Download the jar for your loader from [GitHub Releases](../../releases). (The Modrinth and CurseForge
+listings aren't public yet.) A world's background server runs the same loader and mods as the
 game that hands it off, run from the game's own installation: MCPersist downloads nothing.
 
 MCPersist can't be installed alongside e4mc.
