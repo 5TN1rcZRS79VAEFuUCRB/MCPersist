@@ -72,6 +72,13 @@ on, so a server without a whitelist is open to anyone who has the address. To ke
 set `hostEnabled = false` in `config/mcpersist/mcpersist.toml`. With `requireMod = true`, only players who have
 MCPersist can join; anyone else is turned away with a link to the mod.
 
+## Official server
+
+Want to see MCPersist in action? Join **official.mcpersist.com** (Minecraft 26.3 with MCPersist installed).
+It's a public survival server hosted from a home PC through the MCPersist relay, with no port forwarding.
+Claim land with diamonds, team up with friends, and raid other teams in declared wars. The one rule is no
+cheating. Simple Voice Chat works there too.
+
 ## Running costs
 
 The relays that carry worlds, voice chat and peer-to-peer connections cost about $11 a month: a server
