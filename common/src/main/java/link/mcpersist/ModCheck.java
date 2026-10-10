@@ -18,10 +18,10 @@ public final class ModCheck {
     public static final Identifier ID = Identifier.fromNamespaceAndPath(MCPersist.MOD_ID, "hello");
     // Clear of the small counters loaders number their own login queries with.
     public static final int TRANSACTION = 0x6D637073;
-    // Literal, since a client without the mod has no translation for it. mcpersist.com redirects
-    // to wherever the mod is published, so the address stays right when that changes.
+    // Literal, since a client without the mod has no translation for it. The page walks players
+    // through installing it, and can change without a release.
     public static final Component REFUSED = Component.literal(
-            "This server requires the MCPersist mod.\nGet it at mcpersist.com");
+            "This server requires the MCPersist mod.\nIt's free and takes a few minutes to set up.\n\nHow to join: mcpersist.com/join");
 
     // Shown to a player who joined through the relay without the mod.
     public static final Component TIP = Component.literal("This world is shared with MCPersist. With the mod, "
