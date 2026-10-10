@@ -1,0 +1,48 @@
+name: modrinth-prune
+# Deletes every Modrinth version except those of one release, and sets the kept ones' environment.
+# Run by hand; it only lists what it would do unless "delete" is ticked.
+on:
+  workflow_dispatch:
+    inputs:
+      keep:
+        description: "Release to keep, e.g. 2.0.0-alpha.29"
+        required: true
+      delete:
+        description: "Really delete (otherwise only list)"
+        type: boolean
+        default: false
+jobs:
+  prune:
+    runs-on: ubuntu-latest
+    env:
+      MODRINTH_TOKEN: ${{ secrets.MODRINTH_TOKEN }}
+      PROJECT: ${{ vars.MODRINTH_PROJECT_ID }}
+      KEEP: ${{ inputs.keep }}
+      DELETE: ${{ inputs.delete }}
+    steps:
+      - name: Prune
+        run: |
+          api=https://api.modrinth.com/v2
+          ua="User-Agent: MCPersist prune workflow"
+          curl --fail-with-body -sS "$api/project/$PROJECT/version" -H "Authorization: $MODRINTH_TOKEN" -H "$ua" > versions.json
+          echo "All versions:"
+          jq -r '.[] | "  \(.version_number)  \(.id)  env=\(.environment // "?")"' versions.json
+          keep_ids=$(jq -r --arg keep "$KEEP" '.[] | select(.version_number | startswith($keep + "+")) | .id' versions.json)
+          [ -n "$keep_ids" ] || { echo "No versions of $KEEP found; nothing done."; exit 1; }
+          for id in $(jq -r --arg keep "$KEEP" '.[] | select(.version_number | startswith($keep + "+") | not) | .id' versions.json); do
+            if [ "$DELETE" = true ]; then
+              curl --fail-with-body -sS -X DELETE "$api/version/$id" -H "Authorization: $MODRINTH_TOKEN" -H "$ua" && echo "Deleted $id"
+            else
+              echo "Would delete $id"
+            fi
+          done
+          for id in $keep_ids; do
+            if [ "$DELETE" = true ]; then
+              # Not documented as modifiable; tried anyway, and reported if Modrinth refuses.
+              curl -sS -o resp.txt -w "%{http_code}" -X PATCH "$api/version/$id" -H "Authorization: $MODRINTH_TOKEN" -H "$ua" \
+                -H "Content-Type: application/json" -d '{"environment":"client_or_server_prefers_both"}' > code.txt || true
+              echo "Environment of $id: HTTP $(cat code.txt) $(cat resp.txt)"
+            else
+              echo "Would keep $id and set its environment"
+            fi
+          done
