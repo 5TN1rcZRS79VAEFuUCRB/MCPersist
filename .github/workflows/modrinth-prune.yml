@@ -25,6 +25,9 @@ jobs:
         run: |
           api=https://api.modrinth.com/v2
           ua="User-Agent: MCPersist prune workflow"
+          for path in "user" "project/$PROJECT" "project/$PROJECT/version"; do
+            echo "GET /$path: HTTP $(curl -sS -o /dev/null -w '%{http_code}' "$api/$path" -H "Authorization: $MODRINTH_TOKEN" -H "$ua")"
+          done
           curl --fail-with-body -sS "$api/project/$PROJECT/version" -H "Authorization: $MODRINTH_TOKEN" -H "$ua" > versions.json
           echo "All versions:"
           jq -r '.[] | "  \(.version_number)  \(.id)  env=\(.environment // "?")"' versions.json
