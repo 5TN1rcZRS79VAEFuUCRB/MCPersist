@@ -15,6 +15,7 @@
     "selectWorld.mcpersist.resetAddress.title": "Give this world a new address?",
     "selectWorld.mcpersist.resetAddress.message": "Anyone using the old address won't be able to join any more. Share the new one with your friends after opening the world.",
     "text.mcpersist.whitelistOn": "The whitelist is on, so only players you add can join. Before a friend joins for the first time, run %s",
+    "text.mcpersist.updateAvailable": "MCPersist %s is out (you have %s). Get it at %s",
     "text.mcpersist.peerToPeerTip": "Tip: friends who also install MCPersist connect straight to you, peer-to-peer, instead of through the relay. That's usually faster and more stable.",
     "text.mcpersist.howToShare": "MCPersist: to share this world, press Esc, click World Options... and turn LAN on.",
     "text.mcpersist.movingToBackground": "This world is moving to a background server. Rejoin in a moment.",

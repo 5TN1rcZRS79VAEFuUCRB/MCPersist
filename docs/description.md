@@ -40,6 +40,7 @@ Your friends join by adding the address as a server in Multiplayer. If they inst
 - Players connect through the MCPersist relays at mcpersist.com, or peer-to-peer when both sides have the mod. The relays forward game traffic, which Minecraft encrypts. They store your world's address name, but not your world or your chat.
 - MCPersist downloads no files. Its native libraries (for the relay connection and peer-to-peer) are inside the mod jar.
 - The background server runs from your game's own installation, the same Minecraft and mod loader files your launcher installed, with a copy of the mods in your game's mods folder.
+- When you share a world, MCPersist checks mcpersist.com for a newer version and says so in chat if there is one (`checkForUpdates = false` in the config turns this off). It never downloads updates.
 - MCPersist doesn't collect usage data or analytics.
 
 ## Running costs

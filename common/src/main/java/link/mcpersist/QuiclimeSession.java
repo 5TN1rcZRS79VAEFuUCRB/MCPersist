@@ -352,6 +352,7 @@ public class QuiclimeSession {
                                                 addMessage(Component.translatable("text.mcpersist.peerToPeerTip")
                                                         .withStyle(ChatFormatting.GRAY));
                                             }
+                                            UpdateCheck.check(QuiclimeSession::addMessage);
                                             if (LocalHandoff.usesWhitelist() && attempt == 0) {
                                                 addMessage(Component.translatable("text.mcpersist.whitelistOn",
                                                         Component.literal("/whitelist add <name>").withStyle(it -> it

@@ -59,6 +59,9 @@ game that hands it off, run from the game's own installation: MCPersist download
 
 MCPersist can't be installed alongside e4mc.
 
+When you share a world, MCPersist checks mcpersist.com for a newer version and says so in chat if there is one;
+set `checkForUpdates = false` in `config/mcpersist/mcpersist.toml` to turn that off.
+
 ## Dedicated servers
 
 MCPersist works on a dedicated server too: put the jar (and Fabric API, on Fabric) in the server's `mods`

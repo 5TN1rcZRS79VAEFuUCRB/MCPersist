@@ -48,6 +48,8 @@ public final class Config {
             "Whether to enable Dialtone peer-to-peer connections as the host");
     public static final boolean dialtonePlayerEnabled = flag("dialtonePlayerEnabled", true,
             "Whether to enable Dialtone peer-to-peer connections as the player");
+    public static final boolean checkForUpdates = flag("checkForUpdates", true,
+            "Whether to say in chat when a newer MCPersist is out, once you start sharing a world");
 
     static {
         if (!Files.exists(FILE)) {
