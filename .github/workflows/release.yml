@@ -48,8 +48,9 @@ jobs:
               project_id: $project, name: "MCPersist \($version) (\($loader))", version_number: "\($version)+\($loader)",
               version_type: $type, changelog: "https://github.com/5TN1rcZRS79VAEFuUCRB/MCPersist/releases/tag/v\($version)",
               game_versions: [$mc], loaders: [$loader], featured: true, file_parts: ["file"],
-              # Only the host needs it; players who join may add it for peer-to-peer.
-              environment: "client_only",
+              # Works on a host's game or a dedicated server alone; players who also have it
+              # connect peer-to-peer.
+              environment: "client_or_server_prefers_both",
               dependencies: $deps
             }' > data.json
             curl --fail-with-body -sS https://api.modrinth.com/v2/version \
