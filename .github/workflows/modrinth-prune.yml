@@ -1,5 +1,6 @@
 name: modrinth-prune
-# Deletes every Modrinth version except those of one release, and sets the kept ones' environment.
+# Deletes every Modrinth version except those of one release. (The API ignores changes to a
+# version's environment; set that on the website.)
 # Run by hand; it only lists what it would do unless "delete" is ticked.
 on:
   workflow_dispatch:
@@ -25,9 +26,6 @@ jobs:
         run: |
           api=https://api.modrinth.com/v2
           ua="User-Agent: MCPersist prune workflow"
-          for path in "user" "project/$PROJECT" "project/$PROJECT/version"; do
-            echo "GET /$path: HTTP $(curl -sS -o /dev/null -w '%{http_code}' "$api/$path" -H "Authorization: $MODRINTH_TOKEN" -H "$ua")"
-          done
           curl --fail-with-body -sS "$api/project/$PROJECT/version" -H "Authorization: $MODRINTH_TOKEN" -H "$ua" > versions.json
           echo "All versions:"
           jq -r '.[] | "  \(.version_number)  \(.id)  env=\(.environment // "?")"' versions.json
@@ -38,15 +36,5 @@ jobs:
               curl --fail-with-body -sS -X DELETE "$api/version/$id" -H "Authorization: $MODRINTH_TOKEN" -H "$ua" && echo "Deleted $id"
             else
               echo "Would delete $id"
-            fi
-          done
-          for id in $keep_ids; do
-            if [ "$DELETE" = true ]; then
-              # Not documented as modifiable; tried anyway, and reported if Modrinth refuses.
-              curl -sS -o resp.txt -w "%{http_code}" -X PATCH "$api/version/$id" -H "Authorization: $MODRINTH_TOKEN" -H "$ua" \
-                -H "Content-Type: application/json" -d '{"environment":"client_or_server_prefers_both"}' > code.txt || true
-              echo "Environment of $id: HTTP $(cat code.txt) $(cat resp.txt)"
-            else
-              echo "Would keep $id and set its environment"
             fi
           done
