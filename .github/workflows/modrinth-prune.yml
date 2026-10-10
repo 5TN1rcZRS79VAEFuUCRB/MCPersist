@@ -15,7 +15,9 @@ jobs:
   prune:
     runs-on: ubuntu-latest
     env:
-      MODRINTH_TOKEN: ${{ secrets.MODRINTH_TOKEN }}
+      # A token with the "Read projects", "Read versions" and "Delete versions" scopes; the release
+      # token can only create versions.
+      MODRINTH_TOKEN: ${{ secrets.MODRINTH_PRUNE_TOKEN }}
       PROJECT: ${{ vars.MODRINTH_PROJECT_ID }}
       KEEP: ${{ inputs.keep }}
       DELETE: ${{ inputs.delete }}
