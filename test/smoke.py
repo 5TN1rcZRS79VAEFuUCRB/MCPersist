@@ -455,6 +455,45 @@ def test_relayed_leave(cache, relay_bin):
           f"{len(announcement)}-byte relay announcement arrived whole")
 
 
+def test_relayed_pings(cache, relay_bin):
+    """More server-list pings through the relay than the 512 streams it may have open at once:
+    each one's stream has to be freed after the server closes it."""
+    if sys.platform != "linux":
+        # The relay allows 30 connections a minute per IP; only Linux answers on all of 127/8.
+        print("SKIP: relayed ping streams (needs Linux for many loopback addresses)")
+        return
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        relay, jvm_args, mod_config, mc_port, _ = start_relay(relay_bin, root)
+        try:
+            server_root = root / "server"
+            server_root.mkdir()
+            prepare_server(server_root, cache, mod_config)
+            server = Server(server_root, jvm_args)
+            host = server.wait_for("Domain assigned: ", timeout=300).split("Domain assigned: ", 1)[1].strip().encode()
+            if not any("Done (" in logged for logged in server.log):
+                server.wait_for("Done (", timeout=300)
+            for n in range(600):
+                with socket.socket() as player:
+                    player.settimeout(15)
+                    player.bind((f"127.1.{n // 250}.{n % 250 + 1}", 0))
+                    try:
+                        player.connect(("127.0.0.1", mc_port))
+                        player.sendall(packet(0, varint(777) + varint(len(host)) + host + struct.pack(">H", 25565) + varint(1)))
+                        player.sendall(packet(0, b""))
+                        _, status = read_packet(player)
+                        player.sendall(packet(1, struct.pack(">Q", n)))
+                        read_packet(player)  # The pong, after which the server closes the stream.
+                    except OSError as e:
+                        fail(f"server-list ping {n} through the relay failed: {e!r}", server)
+                    if b'"protocol":-1' in status:  # The relay's own answer, not the server's.
+                        fail(f"server-list ping {n} was answered by the relay: {status!r}", server)
+            server.stop_cleanly()
+        finally:
+            relay.kill()
+    print("PASS: 600 server-list pings in a row got through the relay")
+
+
 def read_varint(sock):
     n = shift = 0
     while True:
@@ -861,6 +900,7 @@ def main():
             test_stable_address(cache, relay_bin)
             test_relayed_leave(cache, relay_bin)
             test_relayed_without_mod(cache, relay_bin)
+            test_relayed_pings(cache, relay_bin)
             test_relay_restart(cache, relay_bin)
         else:
             print("SKIP: stable-address check (set MCPERSIST_RELAY to an mcpersist-relay binary)")

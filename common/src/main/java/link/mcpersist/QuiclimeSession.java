@@ -264,7 +264,7 @@ public class QuiclimeSession {
                                 // it to be sent, which on a stream that's already gone can never
                                 // happen: the player stayed until the 30 s read timeout. Closing the
                                 // stream drops them at once.
-                                ch.pipeline().addLast(new ChannelInboundHandlerAdapter() {
+                                ch.pipeline().addLast(new ChannelDuplexHandler() {
                                     @Override
                                     public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
                                         if (cause instanceof QuicException) {
@@ -272,6 +272,20 @@ public class QuiclimeSession {
                                         } else {
                                             ctx.fireExceptionCaught(cause);
                                         }
+                                    }
+
+                                    // When the game closes first (after a server-list pong, or a
+                                    // disconnect), the closed channel never reads the relay's end of
+                                    // the stream, so QUIC never frees it. Each such stream used up
+                                    // one of the relay's 512, and after 512 server-list pings no one
+                                    // could connect. Shutting down the read side lets it be freed.
+                                    @Override
+                                    public void close(ChannelHandlerContext ctx, ChannelPromise promise) {
+                                        QuicStreamChannel stream = (QuicStreamChannel) ctx.channel();
+                                        if (!stream.isInputShutdown()) {
+                                            stream.shutdownInput();
+                                        }
+                                        ctx.close(promise);
                                     }
                                 }, handler);
                             }
