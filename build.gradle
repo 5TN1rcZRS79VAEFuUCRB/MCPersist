@@ -72,6 +72,8 @@ def patchedRepo = layout.buildDirectory.dir('patched-maven').get().asFile
 
 repositories {
     maven { url 'https://maven.is-quite.gay/' }
+    // The QUIC POM's parent chain ends at org.sonatype.oss:oss-parent, which only Maven Central has.
+    mavenCentral()
 }
 
 patchedLibraries.each { library ->
