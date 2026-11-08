@@ -77,10 +77,10 @@ MCPersist can join; anyone else is turned away with a link to the mod.
 
 ## Official server
 
-Want to see MCPersist in action? Join **official.mcpersist.com** (Minecraft 26.3 with MCPersist and Simple Voice Chat installed).
-It's a public survival server hosted from a home PC through the MCPersist relay, with no port forwarding.
-Claim land with diamonds, team up with friends, and raid other teams in declared wars. The one rule is no
-cheating.
+Want to see MCPersist in action? Join **official.mcpersist.com** (Minecraft 26.3, no mods needed).
+It's a public anarchy server hosted from a home PC through the MCPersist relay, with no port forwarding.
+No rules and no staff: anticheat and anti-xray run automatically, and the map wipes on the first Thursday
+of every month.
 
 ## Running costs
 
