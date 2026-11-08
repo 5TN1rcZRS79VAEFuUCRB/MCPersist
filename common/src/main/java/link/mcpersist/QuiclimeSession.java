@@ -219,7 +219,12 @@ public class QuiclimeSession {
             var codec = new QuicClientCodecBuilder()
                     .sslContext(context)
                     .sslEngineProvider(it -> context.newEngine(it.alloc(), relayHost, relayPort))
-                    .initialMaxStreamsBidirectional(512)
+                    // How many player streams the relay may have open at once. Streams the game
+                    // closed during login (a kick by the mod check or the whitelist, and some others
+                    // seen on the official server) are never freed by QUIC; at 512 the relay cut the
+                    // host off about once a day. ponytail: a ceiling so high those leaks can't reach
+                    // it before a restart, not a fix for the leak itself.
+                    .initialMaxStreamsBidirectional(1 << 20)
                     .maxIdleTimeout(10, TimeUnit.SECONDS)
                     .initialMaxData(4611686018427387903L)
                     .initialMaxStreamDataBidirectionalRemote(1250000)
